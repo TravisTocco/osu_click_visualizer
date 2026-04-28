@@ -2019,7 +2019,7 @@ def estimate_replay_to_song_offset(clicks: List[ClickEvent], objects: List[HitOb
             best_hits = hits
 
     total = best_offset + MANUAL_REPLAY_TO_SONG_OFFSET_MS
-    print(f"Auto timing calibration: offset={best_offset}ms, matched_taps≈{best_hits}/{len(click_times)}")
+    print(f"Auto timing calibration: offset={best_offset}ms, matched_taps~{best_hits}/{len(click_times)}")
     print(f"Manual timing fine tune: {MANUAL_REPLAY_TO_SONG_OFFSET_MS}ms -> total replay_to_song_offset={total}ms")
     return total
 
