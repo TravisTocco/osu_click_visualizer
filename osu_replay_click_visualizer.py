@@ -2160,13 +2160,8 @@ class Renderer:
         self.base_template = self.make_base_template()
 
     def load_background(self) -> Optional[np.ndarray]:
-        if not DRAW_BACKGROUND or BACKGROUND_MODE in ("solid", "off"):
+        if not DRAW_BACKGROUND or BACKGROUND_MODE == "off":
             return None
-        if BACKGROUND_MODE == "dim":
-            stylized = self.make_stylized_solid_background()
-            dark = np.zeros_like(stylized)
-            dim_strength = min(0.92, DARKEN_BACKGROUND + 0.12)
-            return cv2.addWeighted(stylized, 1.0 - dim_strength, dark, dim_strength, 0)
         if not self.beatmap or not self.beatmap.background_filename:
             return None
 
@@ -2187,7 +2182,8 @@ class Renderer:
         crop = resized[y0:y0 + OUTPUT_HEIGHT, x0:x0 + OUTPUT_WIDTH]
         crop = cv2.GaussianBlur(crop, (0, 0), 5)
         dark = np.zeros_like(crop)
-        return cv2.addWeighted(crop, 1.0 - DARKEN_BACKGROUND, dark, DARKEN_BACKGROUND, 0)
+        darken = min(0.92, DARKEN_BACKGROUND + 0.12) if BACKGROUND_MODE == "dim" else DARKEN_BACKGROUND
+        return cv2.addWeighted(crop, 1.0 - darken, dark, darken, 0)
 
     def make_stylized_solid_background(self) -> np.ndarray:
         """Generate the legacy abstract background used by older versions."""
@@ -2330,10 +2326,7 @@ class Renderer:
         cv2.addWeighted(overlay, alpha, roi, 1.0 - alpha, 0.0, roi)
 
     def make_base_template(self) -> np.ndarray:
-        if BACKGROUND_MODE == "solid" and DRAW_BACKGROUND:
-            img = self.make_stylized_solid_background()
-        else:
-            img = self.background.copy() if self.background is not None else np.full((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), COLOR_BG, dtype=np.uint8)
+        img = self.background.copy() if self.background is not None else np.full((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), COLOR_BG, dtype=np.uint8)
         self.draw_field(img)
         return img
 
