@@ -75,6 +75,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osu_visu
 DEFAULT_CONFIG = {
     "visual_style": "ghost",                 # "solid" or "ghost"
     "cursor_style": "classic",               # "classic", "bright", "minimal", "ring"
+    "cursor_size": 1.25,                     # 0.8-2.0 multiplier
     "render_encoder": "h264_nvenc",          # "h264_nvenc" or "libx264"
     "quality_profile": "high",             # "fast", "balanced", "high", "max"
     "performance_mode": "quality",        # "quality", "fast", "turbo", or "custom"
@@ -421,6 +422,11 @@ if VISUAL_STYLE not in ("solid", "ghost"):
 CURSOR_STYLE = str(CONFIG.get("cursor_style", "classic")).strip().lower()
 if CURSOR_STYLE not in ("classic", "bright", "minimal", "ring"):
     CURSOR_STYLE = "classic"
+try:
+    CURSOR_SIZE = float(CONFIG.get("cursor_size", 1.25))
+except (TypeError, ValueError):
+    CURSOR_SIZE = 1.25
+CURSOR_SIZE = max(0.8, min(2.0, CURSOR_SIZE))
 BACKGROUND_MODE = str(CONFIG.get("background_mode", "dim")).strip().lower()
 if BACKGROUND_MODE not in ("dim", "solid", "off"):
     BACKGROUND_MODE = "dim"
@@ -2650,7 +2656,7 @@ class Renderer:
 
     def draw_cursor(self, img, f: ReplayFrame):
         px, py = self.pf(f.x, f.y)
-        size = max(1.0, self.scale * 1.25)
+        size = max(1.0, self.scale * CURSOR_SIZE)
 
         if CURSOR_STYLE == "bright":
             # Bright yellow "dot cursor" like common osu skin cursor choices.
@@ -3609,6 +3615,7 @@ def start_ui() -> None:
     cursor_style_var = tk.StringVar(value=str(cfg.get("cursor_style", "classic")).strip().lower())
     if cursor_style_var.get() not in ("classic", "bright", "minimal", "ring"):
         cursor_style_var.set("classic")
+    cursor_size_var = tk.StringVar(value=str(cfg.get("cursor_size", 1.25)))
     encoder_var = tk.StringVar(value=str(cfg.get("render_encoder", "h264_nvenc")))
     quality_choices = ["fast", "balanced", "high", "max"]
     quality_var = tk.StringVar(value=str(cfg.get("quality_profile", "fast")).strip().lower())
@@ -3922,6 +3929,7 @@ def start_ui() -> None:
         preview_key = (
             visual_style_var.get(),
             cursor_style_var.get(),
+            cursor_size_var.get(),
             performance_var.get(),
             background_mode_var.get(),
             judgment_show_great_var.get(),
@@ -4109,7 +4117,10 @@ def start_ui() -> None:
 
         cursor_x, cursor_y = 222, 199
         cursor_style_choice = cursor_style_var.get().strip().lower()
-        preview_cursor_scale = 1.35
+        try:
+            preview_cursor_scale = max(0.8, min(2.0, float(cursor_size_var.get().strip())))
+        except ValueError:
+            preview_cursor_scale = 1.25
         if cursor_style_choice == "bright":
             bright_overlay = img.copy()
             circle(bright_overlay, cursor_x, cursor_y, 16 * preview_cursor_scale, "#ffd95c")
@@ -4197,7 +4208,7 @@ def start_ui() -> None:
         visual_style_var, performance_var, judgment_show_great_var, judgment_text_great_var,
         judgment_text_ok_var, judgment_text_meh_var, judgment_text_miss_var,
         judgment_position_var, judgment_offset_x_var, judgment_offset_y_var,
-        judgment_draw_miss_x_var, judgment_show_slider_details_var, background_mode_var,
+        judgment_draw_miss_x_var, judgment_show_slider_details_var, background_mode_var, cursor_style_var, cursor_size_var,
     ]
     for var in preview_vars:
         try:
@@ -4217,6 +4228,7 @@ def start_ui() -> None:
     snake_desc_var = tk.StringVar()
     visual_style_desc_var = tk.StringVar()
     cursor_style_desc_var = tk.StringVar()
+    cursor_size_desc_var = tk.StringVar()
     quality_desc_var = tk.StringVar()
     background_mode_desc_var = tk.StringVar()
 
@@ -4266,6 +4278,12 @@ def start_ui() -> None:
             cursor_style_desc_var.set("Ring is a donut-style cursor used by many osu skins.")
         else:
             cursor_style_desc_var.set("Classic keeps the original full crosshair look used in earlier versions.")
+        try:
+            cursor_size_value = float(cursor_size_var.get().strip())
+        except ValueError:
+            cursor_size_value = 1.25
+        cursor_size_value = max(0.8, min(2.0, cursor_size_value))
+        cursor_size_desc_var.set(f"Cursor size multiplier ({cursor_size_value:.2f}x). Recommended range: 1.0 to 1.6.")
 
         quality_choice = quality_var.get().strip().lower()
         if quality_choice == "fast":
@@ -4316,54 +4334,58 @@ def start_ui() -> None:
     ttk.Combobox(main_frame, textvariable=cursor_style_var, values=["classic", "bright", "minimal", "ring"], state="readonly").grid(row=13, column=1, sticky="ew", pady=4)
     desc_label(13, cursor_style_desc_var)
 
-    row_label(14, "Quality")
-    ttk.Combobox(main_frame, textvariable=quality_var, values=quality_choices, state="readonly").grid(row=14, column=1, sticky="ew", pady=4)
-    desc_label(14, quality_desc_var)
+    row_label(14, "Cursor size")
+    ttk.Spinbox(main_frame, from_=0.8, to=2.0, increment=0.05, textvariable=cursor_size_var).grid(row=14, column=1, sticky="ew", pady=4)
+    desc_label(14, cursor_size_desc_var)
 
-    for var in (fps_var, resolution_var, parallel_var, snake_var, visual_style_var, cursor_style_var, quality_var, background_mode_var):
+    row_label(15, "Quality")
+    ttk.Combobox(main_frame, textvariable=quality_var, values=quality_choices, state="readonly").grid(row=15, column=1, sticky="ew", pady=4)
+    desc_label(15, quality_desc_var)
+
+    for var in (fps_var, resolution_var, parallel_var, snake_var, visual_style_var, cursor_style_var, cursor_size_var, quality_var, background_mode_var):
         try:
             var.trace_add("write", update_setting_descriptions)
         except Exception:
             pass
     update_setting_descriptions()
 
-    row_label(15, "Background mode")
-    ttk.Combobox(main_frame, textvariable=background_mode_var, values=["dim", "solid", "off"], state="readonly").grid(row=15, column=1, sticky="ew", pady=4)
-    desc_label(15, background_mode_desc_var)
+    row_label(16, "Background mode")
+    ttk.Combobox(main_frame, textvariable=background_mode_var, values=["dim", "solid", "off"], state="readonly").grid(row=16, column=1, sticky="ew", pady=4)
+    desc_label(16, background_mode_desc_var)
 
-    row_label(16, "Output folder")
-    tk.Entry(main_frame, textvariable=output_dir_var).grid(row=16, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(output_dir_var)).grid(row=16, column=3, sticky="ew", padx=(6, 0))
+    row_label(17, "Output folder")
+    tk.Entry(main_frame, textvariable=output_dir_var).grid(row=17, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(output_dir_var)).grid(row=17, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(17, "osu! root folder")
-    tk.Entry(main_frame, textvariable=osu_root_var).grid(row=17, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(osu_root_var)).grid(row=17, column=3, sticky="ew", padx=(6, 0))
+    row_label(18, "osu! root folder")
+    tk.Entry(main_frame, textvariable=osu_root_var).grid(row=18, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(osu_root_var)).grid(row=18, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(18, "replay/export folder")
-    tk.Entry(main_frame, textvariable=exports_var).grid(row=18, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(exports_var)).grid(row=18, column=3, sticky="ew", padx=(6, 0))
+    row_label(19, "replay/export folder")
+    tk.Entry(main_frame, textvariable=exports_var).grid(row=19, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(exports_var)).grid(row=19, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(19, "Replay file override (optional .osr)")
-    tk.Entry(main_frame, textvariable=replay_var).grid(row=19, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Choose Replay", command=lambda: browse_file(replay_var, [("osu replay", "*.osr"), ("All files", "*.*")])).grid(row=19, column=3, sticky="ew", padx=(6, 0))
+    row_label(20, "Replay file override (optional .osr)")
+    tk.Entry(main_frame, textvariable=replay_var).grid(row=20, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Choose Replay", command=lambda: browse_file(replay_var, [("osu replay", "*.osr"), ("All files", "*.*")])).grid(row=20, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(20, "Beatmap override (optional .osu or .osz)")
-    tk.Entry(main_frame, textvariable=beatmap_var).grid(row=20, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Choose Beatmap", command=lambda: browse_file(beatmap_var, [("osu beatmap/package", "*.osu *.osz *.zip"), ("osu beatmap", "*.osu"), ("osu package", "*.osz *.zip"), ("All files", "*.*")])).grid(row=20, column=3, sticky="ew", padx=(6, 0))
-    tk.Label(main_frame, text="Tip: For osu!(lazer), selecting the exported .osz package is supported.", anchor="w").grid(row=21, column=1, columnspan=3, sticky="w", pady=(0, 4))
+    row_label(21, "Beatmap override (optional .osu or .osz)")
+    tk.Entry(main_frame, textvariable=beatmap_var).grid(row=21, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Choose Beatmap", command=lambda: browse_file(beatmap_var, [("osu beatmap/package", "*.osu *.osz *.zip"), ("osu beatmap", "*.osu"), ("osu package", "*.osz *.zip"), ("All files", "*.*")])).grid(row=21, column=3, sticky="ew", padx=(6, 0))
+    tk.Label(main_frame, text="Tip: For osu!(lazer), selecting the exported .osz package is supported.", anchor="w").grid(row=22, column=1, columnspan=3, sticky="w", pady=(0, 4))
 
-    tk.Label(main_frame, text="Use 'Start Render Now' for the newest existing replay, or 'Watch Exports + Auto Render' to wait for a new export.", anchor="w").grid(row=22, column=0, columnspan=4, sticky="w", pady=(10, 2))
+    tk.Label(main_frame, text="Use 'Start Render Now' for the newest existing replay, or 'Watch Exports + Auto Render' to wait for a new export.", anchor="w").grid(row=24, column=0, columnspan=4, sticky="w", pady=(10, 2))
 
     output_box = tk.Text(main_frame, height=32, wrap="word", bg="#111111", fg="#eeeeee", insertbackground="#eeeeee")
-    output_box.grid(row=23, column=0, columnspan=4, sticky="nsew", pady=(12, 0))
+    output_box.grid(row=25, column=0, columnspan=4, sticky="nsew", pady=(12, 0))
 
     scrollbar = tk.Scrollbar(main_frame, command=output_box.yview)
-    scrollbar.grid(row=23, column=4, sticky="ns", pady=(12, 0))
+    scrollbar.grid(row=25, column=4, sticky="ns", pady=(12, 0))
     output_box.configure(yscrollcommand=scrollbar.set)
 
     main_frame.grid_columnconfigure(1, weight=1)
     main_frame.grid_columnconfigure(2, weight=1)
-    main_frame.grid_rowconfigure(23, weight=1)
+    main_frame.grid_rowconfigure(25, weight=1)
 
     def append_log(text: str):
         output_box.insert("end", text)
@@ -4376,6 +4398,11 @@ def start_ui() -> None:
         new_cfg["visual_style"] = visual_style_var.get().strip().lower()
         cursor_style = cursor_style_var.get().strip().lower()
         new_cfg["cursor_style"] = cursor_style if cursor_style in ("classic", "bright", "minimal", "ring") else "classic"
+        try:
+            cursor_size = float(cursor_size_var.get().strip())
+        except ValueError:
+            cursor_size = 1.25
+        new_cfg["cursor_size"] = max(0.8, min(2.0, cursor_size))
         new_cfg["osu_install_type"] = "stable" if install_type_var.get().strip().lower() in ("osu", "osu!") else "lazer"
         new_cfg["miss_sheet_scale"] = MISS_SHEET_SCALE
         # Encoder is kept on NVENC in the simplified UI; Quality remains user-selectable.
@@ -4500,7 +4527,7 @@ def start_ui() -> None:
         threading.Thread(target=worker, daemon=True).start()
 
     button_frame = tk.Frame(main_frame)
-    button_frame.grid(row=21, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+    button_frame.grid(row=23, column=0, columnspan=4, sticky="ew", pady=(4, 0))
     start_button = tk.Button(button_frame, text="Start Render Now", command=lambda: run_render(False), height=2, bg="#2d7d46", fg="white")
     start_button.pack(side="left", padx=(0, 8))
     watch_button = tk.Button(button_frame, text="Watch Exports + Auto Render", command=lambda: run_render(True), height=2, bg="#345f9e", fg="white")
