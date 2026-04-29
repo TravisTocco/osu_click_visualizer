@@ -2650,38 +2650,45 @@ class Renderer:
 
     def draw_cursor(self, img, f: ReplayFrame):
         px, py = self.pf(f.x, f.y)
+        size = max(1.0, self.scale * 1.25)
 
         if CURSOR_STYLE == "bright":
             # Bright yellow "dot cursor" like common osu skin cursor choices.
             glow_overlay = img.copy()
-            cv2.circle(glow_overlay, (px, py), 17, (110, 215, 255), -1, cv2.LINE_AA)
-            cv2.circle(glow_overlay, (px, py), 11, (130, 235, 255), -1, cv2.LINE_AA)
+            cv2.circle(glow_overlay, (px, py), int(round(17 * size)), (110, 215, 255), -1, cv2.LINE_AA)
+            cv2.circle(glow_overlay, (px, py), int(round(11 * size)), (130, 235, 255), -1, cv2.LINE_AA)
             cv2.addWeighted(glow_overlay, 0.22, img, 0.78, 0, img)
-            cv2.circle(img, (px, py), 7, (150, 240, 255), -1, cv2.LINE_AA)
-            cv2.circle(img, (px, py), 4, (220, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), int(round(7 * size)), (150, 240, 255), -1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), int(round(4 * size)), (220, 255, 255), -1, cv2.LINE_AA)
             return
 
         if CURSOR_STYLE == "minimal":
             # Compact crosshair, inspired by skin overlay/cross styles.
-            cv2.circle(img, (px, py), 2, COLOR_CURSOR, -1, cv2.LINE_AA)
-            cv2.line(img, (px - 10, py), (px - 4, py), COLOR_CURSOR, 1, cv2.LINE_AA)
-            cv2.line(img, (px + 4, py), (px + 10, py), COLOR_CURSOR, 1, cv2.LINE_AA)
-            cv2.line(img, (px, py - 10), (px, py - 4), COLOR_CURSOR, 1, cv2.LINE_AA)
-            cv2.line(img, (px, py + 4), (px, py + 10), COLOR_CURSOR, 1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), int(round(2.6 * size)), COLOR_CURSOR, -1, cv2.LINE_AA)
+            arm_inner = int(round(5 * size))
+            arm_outer = int(round(13 * size))
+            arm_thickness = max(1, int(round(1.2 * size)))
+            cv2.line(img, (px - arm_outer, py), (px - arm_inner, py), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
+            cv2.line(img, (px + arm_inner, py), (px + arm_outer, py), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
+            cv2.line(img, (px, py - arm_outer), (px, py - arm_inner), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
+            cv2.line(img, (px, py + arm_inner), (px, py + arm_outer), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
             return
 
         if CURSOR_STYLE == "ring":
             # Donut/ring cursor seen in many osu skin packs.
-            cv2.circle(img, (px, py), 11, COLOR_CURSOR, 2, cv2.LINE_AA)
-            cv2.circle(img, (px, py), 2, COLOR_CURSOR, -1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), int(round(13 * size)), COLOR_CURSOR, max(1, int(round(2.4 * size))), cv2.LINE_AA)
+            cv2.circle(img, (px, py), int(round(3 * size)), COLOR_CURSOR, -1, cv2.LINE_AA)
             return
 
-        cv2.circle(img, (px, py), 11, COLOR_CURSOR, 2, cv2.LINE_AA)
-        cv2.circle(img, (px, py), 4, COLOR_CURSOR, -1, cv2.LINE_AA)
-        cv2.line(img, (px - 17, py), (px - 6, py), COLOR_CURSOR, 1, cv2.LINE_AA)
-        cv2.line(img, (px + 6, py), (px + 17, py), COLOR_CURSOR, 1, cv2.LINE_AA)
-        cv2.line(img, (px, py - 17), (px, py - 6), COLOR_CURSOR, 1, cv2.LINE_AA)
-        cv2.line(img, (px, py + 6), (px, py + 17), COLOR_CURSOR, 1, cv2.LINE_AA)
+        cv2.circle(img, (px, py), int(round(13 * size)), COLOR_CURSOR, max(1, int(round(2.2 * size))), cv2.LINE_AA)
+        cv2.circle(img, (px, py), int(round(4.8 * size)), COLOR_CURSOR, -1, cv2.LINE_AA)
+        arm_inner = int(round(7 * size))
+        arm_outer = int(round(21 * size))
+        arm_thickness = max(1, int(round(1.2 * size)))
+        cv2.line(img, (px - arm_outer, py), (px - arm_inner, py), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
+        cv2.line(img, (px + arm_inner, py), (px + arm_outer, py), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
+        cv2.line(img, (px, py - arm_outer), (px, py - arm_inner), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
+        cv2.line(img, (px, py + arm_inner), (px, py + arm_outer), COLOR_CURSOR, arm_thickness, cv2.LINE_AA)
 
     def draw_clicks(self, img, song_t: int):
         if not DRAW_CLICK_PULSES:
@@ -4102,29 +4109,30 @@ def start_ui() -> None:
 
         cursor_x, cursor_y = 222, 199
         cursor_style_choice = cursor_style_var.get().strip().lower()
+        preview_cursor_scale = 1.35
         if cursor_style_choice == "bright":
             bright_overlay = img.copy()
-            circle(bright_overlay, cursor_x, cursor_y, 16, "#ffd95c")
-            circle(bright_overlay, cursor_x, cursor_y, 11, "#fff186")
+            circle(bright_overlay, cursor_x, cursor_y, 16 * preview_cursor_scale, "#ffd95c")
+            circle(bright_overlay, cursor_x, cursor_y, 11 * preview_cursor_scale, "#fff186")
             img = cv2.addWeighted(bright_overlay, 0.22, img, 0.78, 0)
-            circle(img, cursor_x, cursor_y, 7, "#ffd74a")
-            circle(img, cursor_x, cursor_y, 4, "#fff7c9")
+            circle(img, cursor_x, cursor_y, 7 * preview_cursor_scale, "#ffd74a")
+            circle(img, cursor_x, cursor_y, 4 * preview_cursor_scale, "#fff7c9")
         elif cursor_style_choice == "minimal":
-            circle(img, cursor_x, cursor_y, 2.2, "#ffffff")
-            line(img, cursor_x - 10, cursor_y, cursor_x - 4, cursor_y, "#ffffff", thickness=0.9)
-            line(img, cursor_x + 4, cursor_y, cursor_x + 10, cursor_y, "#ffffff", thickness=0.9)
-            line(img, cursor_x, cursor_y - 10, cursor_x, cursor_y - 4, "#ffffff", thickness=0.9)
-            line(img, cursor_x, cursor_y + 4, cursor_x, cursor_y + 10, "#ffffff", thickness=0.9)
+            circle(img, cursor_x, cursor_y, 2.8 * preview_cursor_scale, "#ffffff")
+            line(img, cursor_x - 13 * preview_cursor_scale, cursor_y, cursor_x - 5 * preview_cursor_scale, cursor_y, "#ffffff", thickness=1.1)
+            line(img, cursor_x + 5 * preview_cursor_scale, cursor_y, cursor_x + 13 * preview_cursor_scale, cursor_y, "#ffffff", thickness=1.1)
+            line(img, cursor_x, cursor_y - 13 * preview_cursor_scale, cursor_x, cursor_y - 5 * preview_cursor_scale, "#ffffff", thickness=1.1)
+            line(img, cursor_x, cursor_y + 5 * preview_cursor_scale, cursor_x, cursor_y + 13 * preview_cursor_scale, "#ffffff", thickness=1.1)
         elif cursor_style_choice == "ring":
-            circle(img, cursor_x, cursor_y, 11, "#ffffff", thickness=1.8)
-            circle(img, cursor_x, cursor_y, 2.2, "#ffffff")
+            circle(img, cursor_x, cursor_y, 13 * preview_cursor_scale, "#ffffff", thickness=2.1)
+            circle(img, cursor_x, cursor_y, 3.1 * preview_cursor_scale, "#ffffff")
         else:
-            circle(img, cursor_x, cursor_y, 8, "#ffffff", thickness=1.8)
-            circle(img, cursor_x, cursor_y, 3.1, "#ffffff")
-            line(img, cursor_x - 15, cursor_y, cursor_x - 6, cursor_y, "#ffffff", thickness=0.9)
-            line(img, cursor_x + 6, cursor_y, cursor_x + 15, cursor_y, "#ffffff", thickness=0.9)
-            line(img, cursor_x, cursor_y - 15, cursor_x, cursor_y - 6, "#ffffff", thickness=0.9)
-            line(img, cursor_x, cursor_y + 6, cursor_x, cursor_y + 15, "#ffffff", thickness=0.9)
+            circle(img, cursor_x, cursor_y, 10 * preview_cursor_scale, "#ffffff", thickness=2.1)
+            circle(img, cursor_x, cursor_y, 4.8 * preview_cursor_scale, "#ffffff")
+            line(img, cursor_x - 21 * preview_cursor_scale, cursor_y, cursor_x - 7 * preview_cursor_scale, cursor_y, "#ffffff", thickness=1.1)
+            line(img, cursor_x + 7 * preview_cursor_scale, cursor_y, cursor_x + 21 * preview_cursor_scale, cursor_y, "#ffffff", thickness=1.1)
+            line(img, cursor_x, cursor_y - 21 * preview_cursor_scale, cursor_x, cursor_y - 7 * preview_cursor_scale, "#ffffff", thickness=1.1)
+            line(img, cursor_x, cursor_y + 7 * preview_cursor_scale, cursor_x, cursor_y + 21 * preview_cursor_scale, "#ffffff", thickness=1.1)
 
         if pulses_enabled:
             circle(img, cursor_x, cursor_y, 36, "#ff7a1a", thickness=2.5)
