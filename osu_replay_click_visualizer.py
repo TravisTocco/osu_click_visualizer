@@ -88,6 +88,7 @@ DEFAULT_CONFIG = {
     "custom_draw_header": True,
     "custom_draw_slider_ticks": True,
     "custom_draw_slider_follow_circle": True,
+    "custom_draw_stream_connectors": True,
     "custom_draw_judgments": True,
     "custom_draw_judgment_totals": True,
     "judgment_show_great": False,
@@ -403,6 +404,7 @@ DRAW_TIMELINE = True
 DRAW_KEY_BOXES = True
 DRAW_HEADER = True
 DRAW_SLIDER_TICKS = True
+DRAW_STREAM_CONNECTORS = True
 DRAW_JUDGMENTS = True
 DRAW_JUDGMENT_TOTALS = True
 
@@ -480,6 +482,11 @@ COLOR_OK = (70, 190, 255)
 COLOR_MEH = (0, 220, 255)
 COLOR_MISS = (60, 60, 255)
 COLOR_SLIDER_TICK = (240, 240, 240)
+COLOR_STREAM_CONNECTOR = (160, 160, 175)
+
+STREAM_CONNECTOR_MAX_DT_MS = 220
+STREAM_CONNECTOR_MAX_DIST = 170.0
+STREAM_CONNECTOR_FRAME_LIMIT = 28
 
 
 def apply_performance_mode() -> None:
@@ -492,7 +499,7 @@ def apply_performance_mode() -> None:
     """
     global DRAW_BACKGROUND, DRAW_APPROACH_CIRCLES, DRAW_OBJECT_NUMBERS, DRAW_CURSOR_TRAIL
     global DRAW_CLICK_PULSES, DRAW_TIMELINE, DRAW_KEY_BOXES, DRAW_HEADER
-    global DRAW_PLAYFIELD_BORDER, DRAW_SLIDER_TICKS, DRAW_SLIDER_FOLLOW_CIRCLE, DRAW_JUDGMENTS, DRAW_JUDGMENT_TOTALS
+    global DRAW_PLAYFIELD_BORDER, DRAW_SLIDER_TICKS, DRAW_SLIDER_FOLLOW_CIRCLE, DRAW_STREAM_CONNECTORS, DRAW_JUDGMENTS, DRAW_JUDGMENT_TOTALS
 
     if PERFORMANCE_MODE == "fast":
         DRAW_CURSOR_TRAIL = False
@@ -523,6 +530,7 @@ def apply_performance_mode() -> None:
         DRAW_HEADER = bool(CONFIG.get("custom_draw_header", DRAW_HEADER))
         DRAW_SLIDER_TICKS = bool(CONFIG.get("custom_draw_slider_ticks", DRAW_SLIDER_TICKS))
         DRAW_SLIDER_FOLLOW_CIRCLE = bool(CONFIG.get("custom_draw_slider_follow_circle", DRAW_SLIDER_FOLLOW_CIRCLE))
+        DRAW_STREAM_CONNECTORS = bool(CONFIG.get("custom_draw_stream_connectors", DRAW_STREAM_CONNECTORS))
         DRAW_JUDGMENTS = bool(CONFIG.get("custom_draw_judgments", DRAW_JUDGMENTS))
         DRAW_JUDGMENT_TOTALS = bool(CONFIG.get("custom_draw_judgment_totals", DRAW_JUDGMENT_TOTALS))
 
@@ -2461,6 +2469,48 @@ class Renderer:
 
             self.draw_object_judgment(img, obj, song_t)
 
+    def draw_stream_connectors(self, img, song_t: int):
+        if not DRAW_STREAM_CONNECTORS or not self.objects:
+            return
+
+        visible_window_end = song_t + min(self.preempt, 500)
+        start = bisect.bisect_left(self.object_times, song_t - 240)
+        end = bisect.bisect_right(self.object_times, visible_window_end)
+
+        candidates = []
+        for obj in self.objects[start:end]:
+            if obj.kind != "circle":
+                continue
+            if obj.t < song_t - 220 or obj.t > visible_window_end:
+                continue
+            candidates.append(obj)
+
+        if len(candidates) < 2:
+            return
+
+        connector_color = COLOR_STREAM_CONNECTOR if VISUAL_STYLE == "ghost" else (140, 140, 155)
+        alpha = 0.22 if VISUAL_STYLE == "ghost" else 0.15
+        thickness = max(1, int(round(self.scale * 1.6)))
+        lines_drawn = 0
+
+        overlay = img.copy()
+        for i in range(len(candidates) - 1):
+            if lines_drawn >= STREAM_CONNECTOR_FRAME_LIMIT:
+                break
+            a = candidates[i]
+            b = candidates[i + 1]
+            dt = b.t - a.t
+            if dt <= 0 or dt > STREAM_CONNECTOR_MAX_DT_MS:
+                continue
+            dist = math.hypot(b.x - a.x, b.y - a.y)
+            if dist > STREAM_CONNECTOR_MAX_DIST:
+                continue
+            cv2.line(overlay, self.pf(a.x, a.y), self.pf(b.x, b.y), connector_color, thickness, cv2.LINE_AA)
+            lines_drawn += 1
+
+        if lines_drawn > 0:
+            cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
+
     def draw_trail(self, img, song_t: int):
         if not DRAW_CURSOR_TRAIL:
             return
@@ -2621,6 +2671,7 @@ class Renderer:
     def render_frame(self, song_t: int) -> np.ndarray:
         f = self.frame_at_song_time(song_t)
         img = self.base_frame()
+        self.draw_stream_connectors(img, song_t)
         self.draw_objects(img, song_t)
         self.draw_trail(img, song_t)
         self.draw_cursor(img, f)
@@ -3455,6 +3506,7 @@ def start_ui() -> None:
         ("Header text", "custom_draw_header"),
         ("Slider tick dots", "custom_draw_slider_ticks"),
         ("Slider follow circle", "custom_draw_slider_follow_circle"),
+        ("Stream connector lines", "custom_draw_stream_connectors"),
         ("Judgment popups", "custom_draw_judgments"),
         ("Judgment totals HUD", "custom_draw_judgment_totals"),
     ]
@@ -3703,6 +3755,7 @@ def start_ui() -> None:
         header_enabled = preview_layer_enabled("custom_draw_header")
         ticks_enabled = preview_layer_enabled("custom_draw_slider_ticks")
         follow_enabled = preview_layer_enabled("custom_draw_slider_follow_circle")
+        connectors_enabled = preview_layer_enabled("custom_draw_stream_connectors")
         judgments_enabled = preview_layer_enabled("custom_draw_judgments")
         judgment_totals_enabled = preview_layer_enabled("custom_draw_judgment_totals")
 
@@ -3807,6 +3860,13 @@ def start_ui() -> None:
         circle(img, ball_x, ball_y, 15, "#eeeeee", thickness=2)
 
         obj_x, obj_y, obj_r = 250, 196, 25
+        if connectors_enabled:
+            sample_chain = [(186, 214), (214, 205), (250, 196), (292, 186)]
+            connector_color = "#abb0c0" if visual_style_var.get().strip().lower() == "ghost" else "#8e92a3"
+            for i in range(len(sample_chain) - 1):
+                x0, y0 = sample_chain[i]
+                x1, y1 = sample_chain[i + 1]
+                line(img, x0, y0, x1, y1, connector_color, thickness=1.35)
         if approach_enabled:
             circle(img, obj_x, obj_y, 68, "#aaaabe", thickness=1.5)
         fill = "#83d676" if visual_style_var.get().strip().lower() == "ghost" else "#58c958"
