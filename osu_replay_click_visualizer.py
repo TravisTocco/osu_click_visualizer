@@ -2190,19 +2190,41 @@ class Renderer:
         return cv2.addWeighted(crop, 1.0 - DARKEN_BACKGROUND, dark, DARKEN_BACKGROUND, 0)
 
     def make_stylized_solid_background(self) -> np.ndarray:
-        """Generate an osu!-style abstract background for solid mode."""
-        img = np.zeros((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), dtype=np.uint8)
-        top = np.array((30, 22, 50), dtype=np.float32)
-        bottom = np.array((14, 12, 24), dtype=np.float32)
-        grad = np.linspace(0.0, 1.0, OUTPUT_HEIGHT, dtype=np.float32)[:, None]
-        row_colors = (top * (1.0 - grad) + bottom * grad).astype(np.uint8)
-        img[:] = row_colors[:, None, :]
+        """Generate the legacy abstract background used by older versions."""
+        h, w = OUTPUT_HEIGHT, OUTPUT_WIDTH
+        yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+        xx = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :]
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+        img[..., 2] = np.clip(24 + 62 * yy + 20 * (1.0 - xx), 0, 255).astype(np.uint8)  # R
+        img[..., 1] = np.clip(14 + 34 * xx + 18 * yy, 0, 255).astype(np.uint8)            # G
+        img[..., 0] = np.clip(20 + 95 * xx + 22 * (1.0 - yy), 0, 255).astype(np.uint8)    # B
 
-        overlay = img.copy()
-        cv2.circle(overlay, (int(OUTPUT_WIDTH * 0.24), int(OUTPUT_HEIGHT * 0.28)), int(min(OUTPUT_WIDTH, OUTPUT_HEIGHT) * 0.32), (56, 34, 92), -1, cv2.LINE_AA)
-        cv2.circle(overlay, (int(OUTPUT_WIDTH * 0.75), int(OUTPUT_HEIGHT * 0.62)), int(min(OUTPUT_WIDTH, OUTPUT_HEIGHT) * 0.38), (28, 56, 92), -1, cv2.LINE_AA)
-        cv2.addWeighted(overlay, 0.72, img, 0.28, 0, img)
-        cv2.line(img, (0, int(OUTPUT_HEIGHT * 0.84)), (OUTPUT_WIDTH, int(OUTPUT_HEIGHT * 0.22)), (46, 64, 110), max(2, OUTPUT_HEIGHT // 360), cv2.LINE_AA)
+        base_w, base_h = 640.0, 360.0
+        sx, sy = w / base_w, h / base_h
+        s = min(sx, sy)
+        def pxy(x: float, y: float) -> Tuple[int, int]:
+            return int(round(x * sx)), int(round(y * sy))
+        def pr(r: float) -> int:
+            return max(1, int(round(r * s)))
+
+        cv2.circle(img, pxy(72, 58), pr(82), (255, 66, 139), -1, cv2.LINE_AA)
+        cv2.circle(img, pxy(445, 238), pr(145), (216, 183, 0), -1, cv2.LINE_AA)
+        cv2.circle(img, pxy(520, 42), pr(84), (61, 191, 255), -1, cv2.LINE_AA)
+
+        band_thickness = max(1, pr(7))
+        for band_x in range(-220, int(base_w) + 260, 74):
+            cv2.line(
+                img,
+                pxy(band_x, base_h + 38),
+                pxy(band_x + 190, -42),
+                (94, 48, 38),
+                band_thickness,
+                cv2.LINE_AA,
+            )
+
+        for star_x, star_y, star_r in ((44, 132, 2.2), (88, 238, 1.7), (190, 76, 1.5), (514, 146, 2.0), (578, 292, 1.6)):
+            cv2.circle(img, pxy(star_x, star_y), pr(star_r), (255, 239, 233), -1, cv2.LINE_AA)
+
         return img
 
     def pf(self, x: float, y: float) -> Tuple[int, int]:
@@ -3925,19 +3947,27 @@ def start_ui() -> None:
         img = np.full((H, W, 3), bgr("#07070b"), dtype=np.uint8)
 
         preview_bg_mode = background_mode_var.get().strip().lower()
+        def draw_legacy_bg(dst):
+            yy = np.linspace(0.0, 1.0, H, dtype=np.float32)[:, None]
+            xx = np.linspace(0.0, 1.0, W, dtype=np.float32)[None, :]
+            dst[..., 2] = np.clip(24 + 62 * yy + 20 * (1.0 - xx), 0, 255).astype(np.uint8)
+            dst[..., 1] = np.clip(14 + 34 * xx + 18 * yy, 0, 255).astype(np.uint8)
+            dst[..., 0] = np.clip(20 + 95 * xx + 22 * (1.0 - yy), 0, 255).astype(np.uint8)
+            circle(dst, 72, 58, 82, "#8b42ff")
+            circle(dst, 445, 238, 145, "#00b7d8")
+            circle(dst, 520, 42, 84, "#ffbf3d")
+            for band_x in range(-220, w + 260, 74):
+                line(dst, band_x, h + 38, band_x + 190, -42, "#26305e", thickness=7)
+            for star_x, star_y, star_r in ((44, 132, 2.2), (88, 238, 1.7), (190, 76, 1.5), (514, 146, 2.0), (578, 292, 1.6)):
+                circle(dst, star_x, star_y, star_r, "#e9efff")
+
         if not bg_enabled or preview_bg_mode == "off":
             # Off = plain near-black output (no simulated background texture).
             img[:] = bgr("#030306")
         elif preview_bg_mode == "solid":
-            img[:] = bgr("#151126")
-            circle(img, 120, 88, 220, "#5f2d97")
-            circle(img, 440, 205, 250, "#245f9a")
-            line(img, 0, 258, 540, 52, "#365fbb", thickness=2.0)
+            draw_legacy_bg(img)
         elif preview_bg_mode == "dim":
-            img[:] = bgr("#151126")
-            circle(img, 120, 88, 220, "#5f2d97")
-            circle(img, 440, 205, 250, "#245f9a")
-            line(img, 0, 258, 540, 52, "#365fbb", thickness=2.0)
+            draw_legacy_bg(img)
             dark = np.full_like(img, bgr("#050508"))
             img = cv2.addWeighted(img, 0.22, dark, 0.78, 0)
         else:
