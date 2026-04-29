@@ -3720,25 +3720,13 @@ def start_ui() -> None:
     visual_options_frame.grid(row=0, column=0, sticky="nsew")
     visual_options_frame.grid_columnconfigure(0, weight=1)
 
-    background_frame = ttk.LabelFrame(visual_options_frame, text="Background")
-    background_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
-    background_frame.grid_columnconfigure(1, weight=1)
-    tk.Label(background_frame, text="Background", anchor="w").grid(row=0, column=0, sticky="w", padx=(8, 6), pady=(6, 4))
-    ttk.Combobox(
-        background_frame,
-        textvariable=background_mode_var,
-        values=["auto", "dim", "solid", "off"],
-        state="readonly",
-    ).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(6, 4))
-    tk.Label(background_frame, text="Auto (from beatmap), Dim beatmap, Solid dark, Off", anchor="w", justify="left").grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
-
     custom_frame = ttk.LabelFrame(visual_options_frame, text="Custom visual layers (used only when Performance mode = custom)")
-    custom_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
+    custom_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
     for idx, (label, key) in enumerate(custom_visual_options):
         tk.Checkbutton(custom_frame, text=label, variable=custom_visual_vars[key]).grid(row=idx // 2, column=idx % 2, sticky="w", padx=8, pady=2)
 
     judgment_frame = ttk.LabelFrame(visual_options_frame, text="Judgment popup text")
-    judgment_frame.grid(row=2, column=0, sticky="ew", padx=(0, 6))
+    judgment_frame.grid(row=1, column=0, sticky="ew", padx=(0, 6))
     judgment_frame.grid_columnconfigure(0, weight=1, uniform="judgment_cols")
     judgment_frame.grid_columnconfigure(1, weight=1, uniform="judgment_cols")
 
@@ -3915,9 +3903,11 @@ def start_ui() -> None:
 
         preview_bg_mode = background_mode_var.get().strip().lower()
         if not bg_enabled or preview_bg_mode == "off":
-            img[:] = bgr("#07070b")
+            # Off = plain near-black output (no simulated background texture).
+            img[:] = bgr("#030306")
         elif preview_bg_mode == "solid":
-            img[:] = bgr("#121218")
+            # Solid = intentionally distinct flat tone so it is easy to tell from Off.
+            img[:] = bgr("#1f2633")
         else:
             img[:] = bgr("#10111a")
             circle(img, 100, 70, 210, "#22152e")
@@ -3931,7 +3921,12 @@ def start_ui() -> None:
                 img = cv2.addWeighted(img, 0.38, dark, 0.62, 0)
 
         fx0, fy0, fw, fh = 132, 36, 340, 248
-        rect(img, fx0, fy0, fx0 + fw, fy0 + fh, "#131318")
+        field_fill = "#131318"
+        if preview_bg_mode == "solid" and bg_enabled:
+            field_fill = "#181f2b"
+        elif preview_bg_mode == "off" or not bg_enabled:
+            field_fill = "#0a0a0f"
+        rect(img, fx0, fy0, fx0 + fw, fy0 + fh, field_fill)
         if border_enabled:
             rect(img, fx0, fy0, fx0 + fw, fy0 + fh, "#4a4a56", thickness=1.4)
 
