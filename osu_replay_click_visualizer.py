@@ -100,7 +100,7 @@ DEFAULT_CONFIG = {
     "judgment_text_offset_y": 0,
     "judgment_draw_miss_x": False,
     "judgment_show_slider_details": False,
-    "parallel_workers": 0,                 # 0 = auto, 1 = off, 2-8 = faster renders
+    "parallel_workers": 0,                 # 0 = auto, 1 = off, 2+ = faster renders (UI supports higher values)
     "render_log_interval_seconds": 10,
     "render_fps": 0,                        # 0 = auto-detect monitor Hz; UI displays detected value
     "render_width": 0,                      # 0 = auto-detect monitor width; UI displays detected value
@@ -322,15 +322,18 @@ def apply_quality_profile() -> None:
         X264_RENDER_CRF = 18
 
 
+MAX_PARALLEL_WORKERS = max(2, min(32, (os.cpu_count() or 2) * 2))
+
+
 def resolve_parallel_workers() -> int:
     if "--render-chunk" in sys.argv:
         return 1
     if PARALLEL_WORKERS_CONFIG > 0:
         # More workers can speed up CPU-heavy renders, but too many may overload Windows/NVENC/disk IO.
-        return max(1, min(8, PARALLEL_WORKERS_CONFIG))
+        return max(1, min(MAX_PARALLEL_WORKERS, PARALLEL_WORKERS_CONFIG))
     # Auto: conservative default. This keeps the PC usable and avoids NVENC/session/disk overload.
     cpu = os.cpu_count() or 2
-    return max(1, min(3, cpu // 2))
+    return max(1, min(4, cpu // 2))
     global NVENC_RENDER_PRESET, NVENC_RENDER_QP, X264_RENDER_PRESET, X264_RENDER_CRF
     # Friendly presets exposed in the UI. Lower QP/CRF = better quality, larger file.
     if QUALITY_PROFILE == "fast":
@@ -3347,7 +3350,10 @@ def start_ui() -> None:
     if quality_var.get() not in quality_choices:
         quality_var.set("fast")
     performance_var = tk.StringVar(value=str(cfg.get("performance_mode", "quality")))
-    parallel_var = tk.StringVar(value=("Auto" if int(cfg.get("parallel_workers", 0) or 0) == 0 else str(int(cfg.get("parallel_workers", 0) or 0))))
+    configured_parallel = int(cfg.get("parallel_workers", 0) or 0)
+    if configured_parallel < 0:
+        configured_parallel = 0
+    parallel_var = tk.StringVar(value=str(min(configured_parallel, MAX_PARALLEL_WORKERS)))
     output_dir_var = tk.StringVar(value=str(cfg.get("output_dir", "") or BASE_OUTPUT_DIR or "osu_visualizer_output"))
     # Default the UI to the detected monitor resolution/refresh rate.
     # The config may store 0 for auto, but users should see/select the actual value they will get.
@@ -3858,12 +3864,16 @@ def start_ui() -> None:
             resolution_desc_var.set(f"Outputs at {resolution_choice}; larger sizes increase per-frame render work.")
 
         parallel_choice = parallel_var.get().strip()
-        if parallel_choice.lower() == "auto":
+        try:
+            parallel_workers = int(parallel_choice)
+        except ValueError:
+            parallel_workers = 0
+        if parallel_workers <= 0:
             parallel_desc_var.set("Auto chooses worker count; workers split silent video rendering into chunks.")
-        elif parallel_choice == "1":
+        elif parallel_workers == 1:
             parallel_desc_var.set("Uses one render process; avoids chunking overhead and shared-resource contention.")
         else:
-            parallel_desc_var.set(f"Uses {parallel_choice} render processes; more workers share disk and encoder resources.")
+            parallel_desc_var.set(f"Uses {parallel_workers} render processes; more workers share disk and encoder resources.")
 
         snake_desc_var.set("Slider reveal lead time; smaller reveals later, larger reveals earlier.")
 
@@ -3896,8 +3906,8 @@ def start_ui() -> None:
     ttk.Combobox(main_frame, textvariable=resolution_var, values=resolution_choices, state="readonly").grid(row=9, column=1, sticky="ew", pady=4)
     desc_label(9, resolution_desc_var)
 
-    row_label(10, "Parallel workers")
-    ttk.Combobox(main_frame, textvariable=parallel_var, values=["Auto", "1", "2", "3", "4", "5", "6", "7", "8"], state="readonly").grid(row=10, column=1, sticky="ew", pady=4)
+    row_label(10, "Parallel workers (0 = Auto)")
+    ttk.Spinbox(main_frame, from_=0, to=MAX_PARALLEL_WORKERS, textvariable=parallel_var, increment=1).grid(row=10, column=1, sticky="ew", pady=4)
     desc_label(10, parallel_desc_var)
 
     row_label(11, "Snake-in duration ms")
@@ -3993,13 +4003,11 @@ def start_ui() -> None:
         new_cfg["judgment_draw_miss_x"] = bool(judgment_draw_miss_x_var.get())
         new_cfg["judgment_show_slider_details"] = bool(judgment_show_slider_details_var.get())
 
-        if parallel_var.get().strip().lower() == "auto":
-            new_cfg["parallel_workers"] = 0
-        else:
-            try:
-                new_cfg["parallel_workers"] = int(parallel_var.get().strip())
-            except ValueError:
-                new_cfg["parallel_workers"] = 0
+        try:
+            parallel_workers = int(parallel_var.get().strip())
+        except ValueError:
+            parallel_workers = 0
+        new_cfg["parallel_workers"] = max(0, min(MAX_PARALLEL_WORKERS, parallel_workers))
         fps_choice = fps_var.get().strip()
         if fps_choice.lower().startswith("auto"):
             new_cfg["render_fps"] = 0
