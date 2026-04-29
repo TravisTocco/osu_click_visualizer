@@ -3860,20 +3860,10 @@ def start_ui() -> None:
         circle(img, ball_x, ball_y, 15, "#eeeeee", thickness=2)
 
         obj_x, obj_y, obj_r = 250, 196, 25
-        stream_chain = [(184, 214), (216, 205), (250, 196), (292, 186)]
+        stream_target_x, stream_target_y = 348, 248
         if connectors_enabled:
             connector_color = "#abb0c0" if visual_style_var.get().strip().lower() == "ghost" else "#8e92a3"
-            for i in range(len(stream_chain) - 1):
-                x0, y0 = stream_chain[i]
-                x1, y1 = stream_chain[i + 1]
-                line(img, x0, y0, x1, y1, connector_color, thickness=1.55)
-        stream_fill = "#67b0ff" if visual_style_var.get().strip().lower() == "ghost" else "#4d86d9"
-        for idx, (sx, sy) in enumerate(stream_chain):
-            radius = 18 if idx < len(stream_chain) - 1 else obj_r
-            circle(img, sx, sy, radius, stream_fill)
-            circle(img, sx, sy, radius, "#eeeeee", thickness=2)
-            if numbers_enabled:
-                put_text(img, str(idx + 2), sx, sy, color="#ffffff", size=0.50, thickness=2, anchor="center")
+            line(img, obj_x, obj_y, stream_target_x, stream_target_y, connector_color, thickness=1.65)
         if approach_enabled:
             circle(img, obj_x, obj_y, 68, "#aaaabe", thickness=1.5)
         fill = "#83d676" if visual_style_var.get().strip().lower() == "ghost" else "#58c958"
@@ -3881,6 +3871,10 @@ def start_ui() -> None:
         circle(img, obj_x, obj_y, obj_r, "#eeeeee", thickness=2)
         if numbers_enabled:
             put_text(img, "5", obj_x, obj_y, color="#ffffff", size=0.62, thickness=2, anchor="center")
+        circle(img, stream_target_x, stream_target_y, obj_r, fill)
+        circle(img, stream_target_x, stream_target_y, obj_r, "#eeeeee", thickness=2)
+        if numbers_enabled:
+            put_text(img, "6", stream_target_x, stream_target_y, color="#ffffff", size=0.62, thickness=2, anchor="center")
 
         if trail_enabled:
             for i, (x, y) in enumerate([(166, 220), (179, 215), (193, 209), (207, 204), (222, 199)]):
