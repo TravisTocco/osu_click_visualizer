@@ -3678,7 +3678,10 @@ def start_ui() -> None:
 
     def _resize_main_frame_to_canvas(event):
         try:
-            ui_canvas.itemconfigure(main_frame_window, width=event.width)
+            current = int(float(ui_canvas.itemcget(main_frame_window, "width") or 0))
+            target = int(event.width)
+            if current != target:
+                ui_canvas.itemconfigure(main_frame_window, width=target)
         except Exception:
             pass
         _refresh_ui_scrollregion()
@@ -3868,8 +3871,32 @@ def start_ui() -> None:
             x, y, anchor_name = cx, cy, "center"
         return x + ox, y + oy, anchor_name
 
+    preview_update_after_id = None
+    last_preview_key = {"value": None}
+
     def update_preview(*_args):
+        nonlocal preview_update_after_id
+        preview_update_after_id = None
         c = preview_canvas
+        preview_key = (
+            visual_style_var.get(),
+            performance_var.get(),
+            background_mode_var.get(),
+            judgment_show_great_var.get(),
+            judgment_text_great_var.get(),
+            judgment_text_ok_var.get(),
+            judgment_text_meh_var.get(),
+            judgment_text_miss_var.get(),
+            judgment_position_var.get(),
+            judgment_offset_x_var.get(),
+            judgment_offset_y_var.get(),
+            judgment_draw_miss_x_var.get(),
+            judgment_show_slider_details_var.get(),
+            tuple((k, bool(v.get())) for k, v in sorted(custom_visual_vars.items())),
+        )
+        if last_preview_key["value"] == preview_key:
+            return
+        last_preview_key["value"] = preview_key
         c.delete("all")
         w, h = PREVIEW_W, PREVIEW_H
         aa_scale = 3
@@ -4094,7 +4121,16 @@ def start_ui() -> None:
         else:
             c.create_text(w // 2, h // 2, text="Preview unavailable", fill="#eeeeee")
 
-    tk.Button(preview_frame, text="Refresh preview", command=update_preview).grid(row=1, column=1, sticky="e", padx=(4, 8), pady=(0, 8))
+    def schedule_preview_update(*_args):
+        nonlocal preview_update_after_id
+        if preview_update_after_id is not None:
+            try:
+                root.after_cancel(preview_update_after_id)
+            except Exception:
+                pass
+        preview_update_after_id = root.after(50, update_preview)
+
+    tk.Button(preview_frame, text="Refresh preview", command=lambda: (last_preview_key.__setitem__("value", None), schedule_preview_update())).grid(row=1, column=1, sticky="e", padx=(4, 8), pady=(0, 8))
 
     preview_vars = [
         visual_style_var, performance_var, judgment_show_great_var, judgment_text_great_var,
@@ -4104,15 +4140,15 @@ def start_ui() -> None:
     ]
     for var in preview_vars:
         try:
-            var.trace_add("write", update_preview)
+            var.trace_add("write", schedule_preview_update)
         except Exception:
             pass
     for var in custom_visual_vars.values():
         try:
-            var.trace_add("write", update_preview)
+            var.trace_add("write", schedule_preview_update)
         except Exception:
             pass
-    root.after(100, update_preview)
+    root.after(100, schedule_preview_update)
 
     fps_desc_var = tk.StringVar()
     resolution_desc_var = tk.StringVar()
