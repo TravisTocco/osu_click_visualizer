@@ -88,6 +88,7 @@ DEFAULT_CONFIG = {
     "custom_draw_header": True,
     "custom_draw_slider_ticks": True,
     "custom_draw_slider_follow_circle": True,
+    "custom_draw_stream_connectors": True,
     "custom_draw_judgments": True,
     "custom_draw_judgment_totals": True,
     "judgment_show_great": False,
@@ -406,6 +407,7 @@ DRAW_TIMELINE = True
 DRAW_KEY_BOXES = True
 DRAW_HEADER = True
 DRAW_SLIDER_TICKS = True
+DRAW_STREAM_CONNECTORS = True
 DRAW_JUDGMENTS = True
 DRAW_JUDGMENT_TOTALS = True
 
@@ -483,6 +485,12 @@ COLOR_OK = (70, 190, 255)
 COLOR_MEH = (0, 220, 255)
 COLOR_MISS = (60, 60, 255)
 COLOR_SLIDER_TICK = (240, 240, 240)
+COLOR_STREAM_CONNECTOR = (160, 160, 175)
+
+STREAM_CONNECTOR_MAX_DT_MS = 260
+STREAM_CONNECTOR_MAX_DIST = 240.0
+STREAM_CONNECTOR_FRAME_LIMIT = 28
+STREAM_CONNECTOR_MOTION_WINDOW = 0.24
 
 
 def apply_performance_mode() -> None:
@@ -495,7 +503,7 @@ def apply_performance_mode() -> None:
     """
     global DRAW_BACKGROUND, DRAW_APPROACH_CIRCLES, DRAW_OBJECT_NUMBERS, DRAW_CURSOR_TRAIL
     global DRAW_CLICK_PULSES, DRAW_TIMELINE, DRAW_KEY_BOXES, DRAW_HEADER
-    global DRAW_PLAYFIELD_BORDER, DRAW_SLIDER_TICKS, DRAW_SLIDER_FOLLOW_CIRCLE, DRAW_JUDGMENTS, DRAW_JUDGMENT_TOTALS
+    global DRAW_PLAYFIELD_BORDER, DRAW_SLIDER_TICKS, DRAW_SLIDER_FOLLOW_CIRCLE, DRAW_STREAM_CONNECTORS, DRAW_JUDGMENTS, DRAW_JUDGMENT_TOTALS
 
     if PERFORMANCE_MODE == "fast":
         DRAW_CURSOR_TRAIL = False
@@ -526,6 +534,7 @@ def apply_performance_mode() -> None:
         DRAW_HEADER = bool(CONFIG.get("custom_draw_header", DRAW_HEADER))
         DRAW_SLIDER_TICKS = bool(CONFIG.get("custom_draw_slider_ticks", DRAW_SLIDER_TICKS))
         DRAW_SLIDER_FOLLOW_CIRCLE = bool(CONFIG.get("custom_draw_slider_follow_circle", DRAW_SLIDER_FOLLOW_CIRCLE))
+        DRAW_STREAM_CONNECTORS = bool(CONFIG.get("custom_draw_stream_connectors", DRAW_STREAM_CONNECTORS))
         DRAW_JUDGMENTS = bool(CONFIG.get("custom_draw_judgments", DRAW_JUDGMENTS))
         DRAW_JUDGMENT_TOTALS = bool(CONFIG.get("custom_draw_judgment_totals", DRAW_JUDGMENT_TOTALS))
 
@@ -2496,6 +2505,85 @@ class Renderer:
 
             self.draw_object_judgment(img, obj, song_t)
 
+    def draw_stream_connectors(self, img, song_t: int):
+        if not DRAW_STREAM_CONNECTORS or not self.objects:
+            return
+
+        visible_window_end = song_t + min(self.preempt, 500)
+        start = bisect.bisect_left(self.object_times, song_t - 240)
+        end = bisect.bisect_right(self.object_times, visible_window_end)
+
+        candidates = []
+        for obj in self.objects[start:end]:
+            if obj.kind != "circle":
+                continue
+            if obj.t < song_t - 220 or obj.t > visible_window_end:
+                continue
+            candidates.append(obj)
+
+        if len(candidates) < 2:
+            return
+
+        connector_color = COLOR_STREAM_CONNECTOR if VISUAL_STYLE == "ghost" else (140, 140, 155)
+        alpha = 0.17 if VISUAL_STYLE == "ghost" else 0.13
+        motion_alpha = 0.32 if VISUAL_STYLE == "ghost" else 0.24
+        thickness = max(1, int(round(self.scale * 1.15)))
+        motion_thickness = max(1, thickness + 1)
+        lines_drawn = 0
+
+        overlay = img.copy()
+        motion_overlay = img.copy()
+        for i in range(len(candidates) - 1):
+            if lines_drawn >= STREAM_CONNECTOR_FRAME_LIMIT:
+                break
+            a = candidates[i]
+            b = candidates[i + 1]
+            dt = b.t - a.t
+            if dt <= 0 or dt > STREAM_CONNECTOR_MAX_DT_MS:
+                continue
+            dist = math.hypot(b.x - a.x, b.y - a.y)
+            if dist > STREAM_CONNECTOR_MAX_DIST:
+                continue
+            ax, ay = self.pf(a.x, a.y)
+            bx, by = self.pf(b.x, b.y)
+            cv2.line(overlay, (ax, ay), (bx, by), connector_color, thickness, cv2.LINE_AA)
+
+            progress = 0.0 if dt <= 0 else max(0.0, min(1.0, (song_t - a.t) / float(dt)))
+            seg_half = STREAM_CONNECTOR_MOTION_WINDOW * 0.5
+            p0 = max(0.0, progress - seg_half)
+            p1 = min(1.0, progress + seg_half)
+            if p1 > p0:
+                sx0 = int(round(ax + (bx - ax) * p0))
+                sy0 = int(round(ay + (by - ay) * p0))
+                sx1 = int(round(ax + (bx - ax) * p1))
+                sy1 = int(round(ay + (by - ay) * p1))
+                cv2.line(motion_overlay, (sx0, sy0), (sx1, sy1), connector_color, motion_thickness, cv2.LINE_AA)
+            lines_drawn += 1
+
+        if lines_drawn > 0:
+            cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
+            cv2.addWeighted(motion_overlay, motion_alpha, img, 1.0 - motion_alpha, 0, img)
+
+    def estimate_stream_connector_pairs(self) -> int:
+        if not self.objects:
+            return 0
+
+        total = 0
+        prev_circle = None
+        for obj in self.objects:
+            if obj.kind != "circle":
+                continue
+            if prev_circle is None:
+                prev_circle = obj
+                continue
+            dt = obj.t - prev_circle.t
+            if 0 < dt <= STREAM_CONNECTOR_MAX_DT_MS:
+                dist = math.hypot(obj.x - prev_circle.x, obj.y - prev_circle.y)
+                if dist <= STREAM_CONNECTOR_MAX_DIST:
+                    total += 1
+            prev_circle = obj
+        return total
+
     def draw_trail(self, img, song_t: int):
         if not DRAW_CURSOR_TRAIL:
             return
@@ -2656,6 +2744,7 @@ class Renderer:
     def render_frame(self, song_t: int) -> np.ndarray:
         f = self.frame_at_song_time(song_t)
         img = self.base_frame()
+        self.draw_stream_connectors(img, song_t)
         self.draw_objects(img, song_t)
         self.draw_trail(img, song_t)
         self.draw_cursor(img, f)
@@ -2706,7 +2795,13 @@ class Renderer:
         print(f"Playfield origin: ({self.origin_x}, {self.origin_y}), scale: {self.scale:.3f}, circle radius: {self.circle_radius}px")
         if self.beatmap:
             sliders = sum(1 for o in self.objects if o.kind == "slider")
+            connector_pairs = self.estimate_stream_connector_pairs()
             print(f"Objects: {len(self.objects)} total, {sliders} sliders")
+            print(
+                f"Stream connectors: {'enabled' if DRAW_STREAM_CONNECTORS else 'disabled'} | "
+                f"qualifying circle pairs in map: {connector_pairs} "
+                f"(dt<={STREAM_CONNECTOR_MAX_DT_MS}ms, dist<={STREAM_CONNECTOR_MAX_DIST:.0f})"
+            )
 
         last_print = time.perf_counter()
         for i in range(total_frames):
@@ -3493,6 +3588,7 @@ def start_ui() -> None:
         ("Header text", "custom_draw_header"),
         ("Slider tick dots", "custom_draw_slider_ticks"),
         ("Slider follow circle", "custom_draw_slider_follow_circle"),
+        ("Stream connector lines", "custom_draw_stream_connectors"),
         ("Judgment popups", "custom_draw_judgments"),
         ("Judgment totals HUD", "custom_draw_judgment_totals"),
     ]
@@ -3741,6 +3837,7 @@ def start_ui() -> None:
         header_enabled = preview_layer_enabled("custom_draw_header")
         ticks_enabled = preview_layer_enabled("custom_draw_slider_ticks")
         follow_enabled = preview_layer_enabled("custom_draw_slider_follow_circle")
+        connectors_enabled = preview_layer_enabled("custom_draw_stream_connectors")
         judgments_enabled = preview_layer_enabled("custom_draw_judgments")
         judgment_totals_enabled = preview_layer_enabled("custom_draw_judgment_totals")
 
@@ -3845,6 +3942,10 @@ def start_ui() -> None:
         circle(img, ball_x, ball_y, 15, "#eeeeee", thickness=2)
 
         obj_x, obj_y, obj_r = 250, 196, 25
+        stream_target_x, stream_target_y = 348, 248
+        if connectors_enabled:
+            connector_color = "#abb0c0" if visual_style_var.get().strip().lower() == "ghost" else "#8e92a3"
+            line(img, obj_x, obj_y, stream_target_x, stream_target_y, connector_color, thickness=1.65)
         if approach_enabled:
             circle(img, obj_x, obj_y, 68, "#aaaabe", thickness=1.5)
         fill = "#83d676" if visual_style_var.get().strip().lower() == "ghost" else "#58c958"
@@ -3852,6 +3953,10 @@ def start_ui() -> None:
         circle(img, obj_x, obj_y, obj_r, "#eeeeee", thickness=2)
         if numbers_enabled:
             put_text(img, "5", obj_x, obj_y, color="#ffffff", size=0.62, thickness=2, anchor="center")
+        circle(img, stream_target_x, stream_target_y, obj_r, fill)
+        circle(img, stream_target_x, stream_target_y, obj_r, "#eeeeee", thickness=2)
+        if numbers_enabled:
+            put_text(img, "6", stream_target_x, stream_target_y, color="#ffffff", size=0.62, thickness=2, anchor="center")
 
         if trail_enabled:
             for i, (x, y) in enumerate([(166, 220), (179, 215), (193, 209), (207, 204), (222, 199)]):
