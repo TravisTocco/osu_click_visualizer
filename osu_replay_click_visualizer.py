@@ -484,8 +484,8 @@ COLOR_MISS = (60, 60, 255)
 COLOR_SLIDER_TICK = (240, 240, 240)
 COLOR_STREAM_CONNECTOR = (160, 160, 175)
 
-STREAM_CONNECTOR_MAX_DT_MS = 220
-STREAM_CONNECTOR_MAX_DIST = 170.0
+STREAM_CONNECTOR_MAX_DT_MS = 260
+STREAM_CONNECTOR_MAX_DIST = 240.0
 STREAM_CONNECTOR_FRAME_LIMIT = 28
 
 
@@ -2489,8 +2489,8 @@ class Renderer:
             return
 
         connector_color = COLOR_STREAM_CONNECTOR if VISUAL_STYLE == "ghost" else (140, 140, 155)
-        alpha = 0.22 if VISUAL_STYLE == "ghost" else 0.15
-        thickness = max(1, int(round(self.scale * 1.6)))
+        alpha = 0.34 if VISUAL_STYLE == "ghost" else 0.24
+        thickness = max(1, int(round(self.scale * 2.2)))
         lines_drawn = 0
 
         overlay = img.copy()
@@ -2510,6 +2510,26 @@ class Renderer:
 
         if lines_drawn > 0:
             cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
+
+    def estimate_stream_connector_pairs(self) -> int:
+        if not self.objects:
+            return 0
+
+        total = 0
+        prev_circle = None
+        for obj in self.objects:
+            if obj.kind != "circle":
+                continue
+            if prev_circle is None:
+                prev_circle = obj
+                continue
+            dt = obj.t - prev_circle.t
+            if 0 < dt <= STREAM_CONNECTOR_MAX_DT_MS:
+                dist = math.hypot(obj.x - prev_circle.x, obj.y - prev_circle.y)
+                if dist <= STREAM_CONNECTOR_MAX_DIST:
+                    total += 1
+            prev_circle = obj
+        return total
 
     def draw_trail(self, img, song_t: int):
         if not DRAW_CURSOR_TRAIL:
@@ -2722,7 +2742,13 @@ class Renderer:
         print(f"Playfield origin: ({self.origin_x}, {self.origin_y}), scale: {self.scale:.3f}, circle radius: {self.circle_radius}px")
         if self.beatmap:
             sliders = sum(1 for o in self.objects if o.kind == "slider")
+            connector_pairs = self.estimate_stream_connector_pairs()
             print(f"Objects: {len(self.objects)} total, {sliders} sliders")
+            print(
+                f"Stream connectors: {'enabled' if DRAW_STREAM_CONNECTORS else 'disabled'} | "
+                f"qualifying circle pairs in map: {connector_pairs} "
+                f"(dt<={STREAM_CONNECTOR_MAX_DT_MS}ms, dist<={STREAM_CONNECTOR_MAX_DIST:.0f})"
+            )
 
         last_print = time.perf_counter()
         for i in range(total_frames):
