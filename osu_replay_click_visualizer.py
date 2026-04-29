@@ -78,7 +78,7 @@ DEFAULT_CONFIG = {
     "quality_profile": "high",             # "fast", "balanced", "high", "max"
     "performance_mode": "quality",        # "quality", "fast", "turbo", or "custom"
     "custom_draw_background": True,
-    "background_mode": "auto",             # "auto", "dim", "solid", "off"
+    "background_mode": "dim",              # "dim", "solid", "off"
     "custom_draw_playfield_border": True,
     "custom_draw_approach_circles": True,
     "custom_draw_object_numbers": True,
@@ -417,9 +417,9 @@ DRAW_JUDGMENT_TOTALS = True
 VISUAL_STYLE = str(CONFIG.get("visual_style", "ghost")).strip().lower()
 if VISUAL_STYLE not in ("solid", "ghost"):
     VISUAL_STYLE = "ghost"
-BACKGROUND_MODE = str(CONFIG.get("background_mode", "auto")).strip().lower()
-if BACKGROUND_MODE not in ("auto", "dim", "solid", "off"):
-    BACKGROUND_MODE = "auto"
+BACKGROUND_MODE = str(CONFIG.get("background_mode", "dim")).strip().lower()
+if BACKGROUND_MODE not in ("dim", "solid", "off"):
+    BACKGROUND_MODE = "dim"
 GHOST_CIRCLE_ALPHA = 0.45
 GHOST_SLIDER_ALPHA = 0.30
 GHOST_SLIDER_BALL_ALPHA = 0.55
@@ -2217,7 +2217,7 @@ class Renderer:
                 img,
                 pxy(band_x, base_h + 38),
                 pxy(band_x + 190, -42),
-                (94, 48, 38),
+                (136, 57, 90),
                 band_thickness,
                 cv2.LINE_AA,
             )
@@ -3628,7 +3628,9 @@ def start_ui() -> None:
     data_sheet_var = tk.BooleanVar(value=bool(cfg.get("generate_data_sheet", True)))
     snake_var = tk.StringVar(value=str(cfg.get("snake_in_duration_ms", 450)))
 
-    background_mode_var = tk.StringVar(value=str(cfg.get("background_mode", "auto")).strip().lower())
+    background_mode_var = tk.StringVar(value=str(cfg.get("background_mode", "dim")).strip().lower())
+    if background_mode_var.get() not in ("dim", "solid", "off"):
+        background_mode_var.set("dim")
 
     custom_visual_options = [
         ("Background", "custom_draw_background"),
@@ -3957,7 +3959,7 @@ def start_ui() -> None:
             circle(dst, 445, 238, 145, "#00b7d8")
             circle(dst, 520, 42, 84, "#ffbf3d")
             for band_x in range(-220, w + 260, 74):
-                line(dst, band_x, h + 38, band_x + 190, -42, "#26305e", thickness=7)
+                line(dst, band_x, h + 38, band_x + 190, -42, "#5a3988", thickness=7)
             for star_x, star_y, star_r in ((44, 132, 2.2), (88, 238, 1.7), (190, 76, 1.5), (514, 146, 2.0), (578, 292, 1.6)):
                 circle(dst, star_x, star_y, star_r, "#e9efff")
 
@@ -3971,12 +3973,10 @@ def start_ui() -> None:
             dark = np.full_like(img, bgr("#050508"))
             img = cv2.addWeighted(img, 0.22, dark, 0.78, 0)
         else:
-            img[:] = bgr("#10111a")
-            circle(img, 100, 70, 210, "#22152e")
-            circle(img, 430, 190, 235, "#0c2630")
-            line(img, 20, 280, 520, 24, "#1f2b3a", thickness=1.2)
-            dark = np.full_like(img, bgr("#07070b"))
-            img = cv2.addWeighted(img, 0.38, dark, 0.62, 0)
+            # Fallback path if legacy configs contain an unsupported value.
+            draw_legacy_bg(img)
+            dark = np.full_like(img, bgr("#050508"))
+            img = cv2.addWeighted(img, 0.22, dark, 0.78, 0)
 
         fx0, fy0, fw, fh = 132, 36, 340, 248
         field_fill = "#131318"
@@ -4186,7 +4186,7 @@ def start_ui() -> None:
         elif bg_mode == "off":
             background_mode_desc_var.set("Off: disables the background layer for the plainest look.")
         else:
-            background_mode_desc_var.set("Auto: uses the beatmap background image when available.")
+            background_mode_desc_var.set("Dim beatmap: keeps background image but applies stronger darkening for readability.")
 
     def desc_label(row: int, var: tk.StringVar):
         tk.Label(main_frame, textvariable=var, anchor="w", justify="left", wraplength=900).grid(row=row, column=2, columnspan=2, sticky="w", pady=4)
@@ -4223,7 +4223,7 @@ def start_ui() -> None:
     update_setting_descriptions()
 
     row_label(14, "Background mode")
-    ttk.Combobox(main_frame, textvariable=background_mode_var, values=["auto", "dim", "solid", "off"], state="readonly").grid(row=14, column=1, sticky="ew", pady=4)
+    ttk.Combobox(main_frame, textvariable=background_mode_var, values=["dim", "solid", "off"], state="readonly").grid(row=14, column=1, sticky="ew", pady=4)
     desc_label(14, background_mode_desc_var)
 
     row_label(15, "Output folder")
@@ -4279,7 +4279,7 @@ def start_ui() -> None:
         for _, key in custom_visual_options:
             new_cfg[key] = bool(custom_visual_vars[key].get())
         bg_mode = background_mode_var.get().strip().lower()
-        new_cfg["background_mode"] = bg_mode if bg_mode in ("auto", "dim", "solid", "off") else "auto"
+        new_cfg["background_mode"] = bg_mode if bg_mode in ("dim", "solid", "off") else "dim"
 
         new_cfg["judgment_show_great"] = bool(judgment_show_great_var.get())
         new_cfg["judgment_text_great"] = judgment_text_great_var.get()
