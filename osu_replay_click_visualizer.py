@@ -2652,26 +2652,27 @@ class Renderer:
         px, py = self.pf(f.x, f.y)
 
         if CURSOR_STYLE == "bright":
+            # Bright yellow "dot cursor" like common osu skin cursor choices.
             glow_overlay = img.copy()
-            cv2.circle(glow_overlay, (px, py), 20, (245, 245, 255), -1, cv2.LINE_AA)
-            cv2.circle(glow_overlay, (px, py), 13, (255, 255, 255), -1, cv2.LINE_AA)
-            cv2.addWeighted(glow_overlay, 0.12, img, 0.88, 0, img)
-            cv2.circle(img, (px, py), 12, (255, 255, 255), 3, cv2.LINE_AA)
-            cv2.circle(img, (px, py), 5, (255, 255, 255), -1, cv2.LINE_AA)
-            cv2.line(img, (px - 18, py), (px - 6, py), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(img, (px + 6, py), (px + 18, py), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(img, (px, py - 18), (px, py - 6), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(img, (px, py + 6), (px, py + 18), (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.circle(glow_overlay, (px, py), 17, (110, 215, 255), -1, cv2.LINE_AA)
+            cv2.circle(glow_overlay, (px, py), 11, (130, 235, 255), -1, cv2.LINE_AA)
+            cv2.addWeighted(glow_overlay, 0.22, img, 0.78, 0, img)
+            cv2.circle(img, (px, py), 7, (150, 240, 255), -1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), 4, (220, 255, 255), -1, cv2.LINE_AA)
             return
 
         if CURSOR_STYLE == "minimal":
-            cv2.circle(img, (px, py), 8, COLOR_CURSOR, 2, cv2.LINE_AA)
+            # Compact crosshair, inspired by skin overlay/cross styles.
             cv2.circle(img, (px, py), 2, COLOR_CURSOR, -1, cv2.LINE_AA)
+            cv2.line(img, (px - 10, py), (px - 4, py), COLOR_CURSOR, 1, cv2.LINE_AA)
+            cv2.line(img, (px + 4, py), (px + 10, py), COLOR_CURSOR, 1, cv2.LINE_AA)
+            cv2.line(img, (px, py - 10), (px, py - 4), COLOR_CURSOR, 1, cv2.LINE_AA)
+            cv2.line(img, (px, py + 4), (px, py + 10), COLOR_CURSOR, 1, cv2.LINE_AA)
             return
 
         if CURSOR_STYLE == "ring":
-            cv2.circle(img, (px, py), 14, COLOR_CURSOR, 2, cv2.LINE_AA)
-            cv2.circle(img, (px, py), 8, COLOR_CURSOR, 1, cv2.LINE_AA)
+            # Donut/ring cursor seen in many osu skin packs.
+            cv2.circle(img, (px, py), 11, COLOR_CURSOR, 2, cv2.LINE_AA)
             cv2.circle(img, (px, py), 2, COLOR_CURSOR, -1, cv2.LINE_AA)
             return
 
@@ -4103,21 +4104,19 @@ def start_ui() -> None:
         cursor_style_choice = cursor_style_var.get().strip().lower()
         if cursor_style_choice == "bright":
             bright_overlay = img.copy()
-            circle(bright_overlay, cursor_x, cursor_y, 16, "#ffffff")
-            circle(bright_overlay, cursor_x, cursor_y, 22, "#d8e8ff")
-            img = cv2.addWeighted(bright_overlay, 0.18, img, 0.82, 0)
-            circle(img, cursor_x, cursor_y, 9, "#ffffff", thickness=2.5)
-            circle(img, cursor_x, cursor_y, 4, "#ffffff")
-            line(img, cursor_x - 16, cursor_y, cursor_x - 6, cursor_y, "#ffffff", thickness=1.4)
-            line(img, cursor_x + 6, cursor_y, cursor_x + 16, cursor_y, "#ffffff", thickness=1.4)
-            line(img, cursor_x, cursor_y - 16, cursor_x, cursor_y - 6, "#ffffff", thickness=1.4)
-            line(img, cursor_x, cursor_y + 6, cursor_x, cursor_y + 16, "#ffffff", thickness=1.4)
+            circle(bright_overlay, cursor_x, cursor_y, 16, "#ffd95c")
+            circle(bright_overlay, cursor_x, cursor_y, 11, "#fff186")
+            img = cv2.addWeighted(bright_overlay, 0.22, img, 0.78, 0)
+            circle(img, cursor_x, cursor_y, 7, "#ffd74a")
+            circle(img, cursor_x, cursor_y, 4, "#fff7c9")
         elif cursor_style_choice == "minimal":
-            circle(img, cursor_x, cursor_y, 7, "#ffffff", thickness=1.8)
             circle(img, cursor_x, cursor_y, 2.2, "#ffffff")
+            line(img, cursor_x - 10, cursor_y, cursor_x - 4, cursor_y, "#ffffff", thickness=0.9)
+            line(img, cursor_x + 4, cursor_y, cursor_x + 10, cursor_y, "#ffffff", thickness=0.9)
+            line(img, cursor_x, cursor_y - 10, cursor_x, cursor_y - 4, "#ffffff", thickness=0.9)
+            line(img, cursor_x, cursor_y + 4, cursor_x, cursor_y + 10, "#ffffff", thickness=0.9)
         elif cursor_style_choice == "ring":
             circle(img, cursor_x, cursor_y, 11, "#ffffff", thickness=1.8)
-            circle(img, cursor_x, cursor_y, 6, "#ffffff", thickness=1.1)
             circle(img, cursor_x, cursor_y, 2.2, "#ffffff")
         else:
             circle(img, cursor_x, cursor_y, 8, "#ffffff", thickness=1.8)
@@ -4252,13 +4251,13 @@ def start_ui() -> None:
 
         cursor_choice = cursor_style_var.get().strip().lower()
         if cursor_choice == "bright":
-            cursor_style_desc_var.set("Bright increases cursor contrast and glow so it is easiest to spot.")
+            cursor_style_desc_var.set("Bright is a high-visibility yellow glow dot, similar to common osu skin cursors.")
         elif cursor_choice == "minimal":
-            cursor_style_desc_var.set("Minimal uses a small clean marker for less screen clutter.")
+            cursor_style_desc_var.set("Minimal is a compact crosshair for precise aim with low clutter.")
         elif cursor_choice == "ring":
-            cursor_style_desc_var.set("Ring uses concentric circles for clear location without long crosshair arms.")
+            cursor_style_desc_var.set("Ring is a donut-style cursor used by many osu skins.")
         else:
-            cursor_style_desc_var.set("Classic keeps the original crosshair look used in earlier versions.")
+            cursor_style_desc_var.set("Classic keeps the original full crosshair look used in earlier versions.")
 
         quality_choice = quality_var.get().strip().lower()
         if quality_choice == "fast":
