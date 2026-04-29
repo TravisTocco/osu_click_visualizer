@@ -487,6 +487,7 @@ COLOR_STREAM_CONNECTOR = (160, 160, 175)
 STREAM_CONNECTOR_MAX_DT_MS = 260
 STREAM_CONNECTOR_MAX_DIST = 240.0
 STREAM_CONNECTOR_FRAME_LIMIT = 28
+STREAM_CONNECTOR_MOTION_WINDOW = 0.24
 
 
 def apply_performance_mode() -> None:
@@ -2489,11 +2490,14 @@ class Renderer:
             return
 
         connector_color = COLOR_STREAM_CONNECTOR if VISUAL_STYLE == "ghost" else (140, 140, 155)
-        alpha = 0.34 if VISUAL_STYLE == "ghost" else 0.24
-        thickness = max(1, int(round(self.scale * 2.2)))
+        alpha = 0.17 if VISUAL_STYLE == "ghost" else 0.13
+        motion_alpha = 0.32 if VISUAL_STYLE == "ghost" else 0.24
+        thickness = max(1, int(round(self.scale * 1.15)))
+        motion_thickness = max(1, thickness + 1)
         lines_drawn = 0
 
         overlay = img.copy()
+        motion_overlay = img.copy()
         for i in range(len(candidates) - 1):
             if lines_drawn >= STREAM_CONNECTOR_FRAME_LIMIT:
                 break
@@ -2505,11 +2509,25 @@ class Renderer:
             dist = math.hypot(b.x - a.x, b.y - a.y)
             if dist > STREAM_CONNECTOR_MAX_DIST:
                 continue
-            cv2.line(overlay, self.pf(a.x, a.y), self.pf(b.x, b.y), connector_color, thickness, cv2.LINE_AA)
+            ax, ay = self.pf(a.x, a.y)
+            bx, by = self.pf(b.x, b.y)
+            cv2.line(overlay, (ax, ay), (bx, by), connector_color, thickness, cv2.LINE_AA)
+
+            progress = 0.0 if dt <= 0 else max(0.0, min(1.0, (song_t - a.t) / float(dt)))
+            seg_half = STREAM_CONNECTOR_MOTION_WINDOW * 0.5
+            p0 = max(0.0, progress - seg_half)
+            p1 = min(1.0, progress + seg_half)
+            if p1 > p0:
+                sx0 = int(round(ax + (bx - ax) * p0))
+                sy0 = int(round(ay + (by - ay) * p0))
+                sx1 = int(round(ax + (bx - ax) * p1))
+                sy1 = int(round(ay + (by - ay) * p1))
+                cv2.line(motion_overlay, (sx0, sy0), (sx1, sy1), connector_color, motion_thickness, cv2.LINE_AA)
             lines_drawn += 1
 
         if lines_drawn > 0:
             cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
+            cv2.addWeighted(motion_overlay, motion_alpha, img, 1.0 - motion_alpha, 0, img)
 
     def estimate_stream_connector_pairs(self) -> int:
         if not self.objects:
