@@ -89,6 +89,7 @@ DEFAULT_CONFIG = {
     "custom_draw_slider_ticks": True,
     "custom_draw_slider_follow_circle": True,
     "custom_draw_judgments": True,
+    "custom_draw_judgment_totals": True,
     "judgment_show_great": False,
     "judgment_text_great": "Great",
     "judgment_text_ok": "100",
@@ -403,6 +404,7 @@ DRAW_KEY_BOXES = True
 DRAW_HEADER = True
 DRAW_SLIDER_TICKS = True
 DRAW_JUDGMENTS = True
+DRAW_JUDGMENT_TOTALS = True
 
 # v28 visual style.
 # "solid" = current opaque look. "ghost" = see-through osu-like look.
@@ -490,13 +492,14 @@ def apply_performance_mode() -> None:
     """
     global DRAW_BACKGROUND, DRAW_APPROACH_CIRCLES, DRAW_OBJECT_NUMBERS, DRAW_CURSOR_TRAIL
     global DRAW_CLICK_PULSES, DRAW_TIMELINE, DRAW_KEY_BOXES, DRAW_HEADER
-    global DRAW_PLAYFIELD_BORDER, DRAW_SLIDER_TICKS, DRAW_SLIDER_FOLLOW_CIRCLE, DRAW_JUDGMENTS
+    global DRAW_PLAYFIELD_BORDER, DRAW_SLIDER_TICKS, DRAW_SLIDER_FOLLOW_CIRCLE, DRAW_JUDGMENTS, DRAW_JUDGMENT_TOTALS
 
     if PERFORMANCE_MODE == "fast":
         DRAW_CURSOR_TRAIL = False
         DRAW_OBJECT_NUMBERS = False
         DRAW_SLIDER_TICKS = False
         DRAW_TIMELINE = False
+        # Fast mode keeps the judgment totals HUD enabled for readability.
     elif PERFORMANCE_MODE == "turbo":
         DRAW_BACKGROUND = False
         DRAW_PLAYFIELD_BORDER = False
@@ -507,6 +510,7 @@ def apply_performance_mode() -> None:
         DRAW_HEADER = False
         DRAW_SLIDER_TICKS = False
         DRAW_SLIDER_FOLLOW_CIRCLE = False
+        DRAW_JUDGMENT_TOTALS = False  # Turbo intentionally removes most overlays for speed.
     elif PERFORMANCE_MODE == "custom":
         DRAW_BACKGROUND = bool(CONFIG.get("custom_draw_background", DRAW_BACKGROUND))
         DRAW_PLAYFIELD_BORDER = bool(CONFIG.get("custom_draw_playfield_border", DRAW_PLAYFIELD_BORDER))
@@ -520,6 +524,7 @@ def apply_performance_mode() -> None:
         DRAW_SLIDER_TICKS = bool(CONFIG.get("custom_draw_slider_ticks", DRAW_SLIDER_TICKS))
         DRAW_SLIDER_FOLLOW_CIRCLE = bool(CONFIG.get("custom_draw_slider_follow_circle", DRAW_SLIDER_FOLLOW_CIRCLE))
         DRAW_JUDGMENTS = bool(CONFIG.get("custom_draw_judgments", DRAW_JUDGMENTS))
+        DRAW_JUDGMENT_TOTALS = bool(CONFIG.get("custom_draw_judgment_totals", DRAW_JUDGMENT_TOTALS))
 
 
 apply_performance_mode()
@@ -2057,6 +2062,16 @@ class Renderer:
             if beatmap
             else {}
         )
+        self.judgment_events_sorted = sorted(
+            (
+                j for j in self.judgments.values()
+                if j.result in ("Great", "Ok", "Meh", "Miss") and j.resolved_t is not None
+            ),
+            key=lambda j: int(j.resolved_t),
+        )
+        self.judgment_totals = {"Great": 0, "Ok": 0, "Meh": 0, "Miss": 0}
+        self.judgment_totals_idx = 0
+        self.judgment_totals_last_t: Optional[int] = None
 
         if USE_OSU_SCREENSPACE_MAPPING:
             self.scale = OUTPUT_HEIGHT / 480.0
@@ -2567,6 +2582,42 @@ class Renderer:
         )
         self.draw_text(img, stats, 28, 57, scale=0.42, thickness=1)
 
+    def judgment_totals_at_time(self, song_t: int) -> Dict[str, int]:
+        if self.judgment_totals_last_t is None or song_t < self.judgment_totals_last_t:
+            self.judgment_totals = {"Great": 0, "Ok": 0, "Meh": 0, "Miss": 0}
+            self.judgment_totals_idx = 0
+
+        while self.judgment_totals_idx < len(self.judgment_events_sorted):
+            event = self.judgment_events_sorted[self.judgment_totals_idx]
+            resolved_t = int(event.resolved_t) if event.resolved_t is not None else 10**12
+            if resolved_t > song_t:
+                break
+            self.judgment_totals[event.result] = self.judgment_totals.get(event.result, 0) + 1
+            self.judgment_totals_idx += 1
+
+        self.judgment_totals_last_t = song_t
+        return dict(self.judgment_totals)
+
+    def draw_judgment_totals_hud(self, img, song_t: int):
+        if not DRAW_JUDGMENT_TOTALS:
+            return
+
+        totals = self.judgment_totals_at_time(song_t)
+        label_great = JUDGMENT_TEXT_LABELS.get("Great", "Great")
+        label_ok = JUDGMENT_TEXT_LABELS.get("Ok", "100")
+        label_meh = JUDGMENT_TEXT_LABELS.get("Meh", "50")
+        label_miss = JUDGMENT_TEXT_LABELS.get("Miss", "Miss")
+        summary = (
+            f"{label_great} {totals.get('Great', 0)} | "
+            f"{label_ok} {totals.get('Ok', 0)} | "
+            f"{label_meh} {totals.get('Meh', 0)} | "
+            f"{label_miss} {totals.get('Miss', 0)}"
+        )
+        size, _ = cv2.getTextSize(summary, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1)
+        x = OUTPUT_WIDTH - size[0] - 30
+        y = 57 if DRAW_HEADER else 32
+        self.draw_text(img, summary, x, y, scale=0.50, thickness=1)
+
     def render_frame(self, song_t: int) -> np.ndarray:
         f = self.frame_at_song_time(song_t)
         img = self.base_frame()
@@ -2577,6 +2628,7 @@ class Renderer:
         self.draw_key_boxes(img, f)
         self.draw_timeline(img, song_t)
         self.draw_header(img, song_t)
+        self.draw_judgment_totals_hud(img, song_t)
         return img
 
     def compute_render_range(self) -> Tuple[int, int, int]:
@@ -3404,6 +3456,7 @@ def start_ui() -> None:
         ("Slider tick dots", "custom_draw_slider_ticks"),
         ("Slider follow circle", "custom_draw_slider_follow_circle"),
         ("Judgment popups", "custom_draw_judgments"),
+        ("Judgment totals HUD", "custom_draw_judgment_totals"),
     ]
     custom_visual_vars = {
         key: tk.BooleanVar(value=bool(cfg.get(key, DEFAULT_CONFIG.get(key, True))))
@@ -3599,6 +3652,7 @@ def start_ui() -> None:
                 "custom_draw_header",
                 "custom_draw_slider_ticks",
                 "custom_draw_slider_follow_circle",
+                "custom_draw_judgment_totals",
             }
         return True
 
@@ -3650,6 +3704,7 @@ def start_ui() -> None:
         ticks_enabled = preview_layer_enabled("custom_draw_slider_ticks")
         follow_enabled = preview_layer_enabled("custom_draw_slider_follow_circle")
         judgments_enabled = preview_layer_enabled("custom_draw_judgments")
+        judgment_totals_enabled = preview_layer_enabled("custom_draw_judgment_totals")
 
         def sc(v: float) -> int:
             return int(round(v * aa_scale))
@@ -3718,6 +3773,13 @@ def start_ui() -> None:
         if header_enabled:
             put_text(img, "Artist - Title [Difficulty]", 18, 24, size=0.44, thickness=1, anchor="left")
             put_text(img, "Replay: player | Song: 12.34s | Offset: 0ms", 18, 43, color="#bbbbbb", size=0.30, thickness=1, anchor="left", shadow=False)
+        if judgment_totals_enabled:
+            label_great = judgment_text_great_var.get().strip() or "Great"
+            label_ok = judgment_text_ok_var.get().strip() or "100"
+            label_meh = judgment_text_meh_var.get().strip() or "50"
+            label_miss = judgment_text_miss_var.get().strip() or "Miss"
+            sample_totals = f"{label_great} 314 | {label_ok} 28 | {label_meh} 6 | {label_miss} 2"
+            put_text(img, sample_totals, w - 16, 43 if header_enabled else 24, color="#eeeeee", size=0.34, thickness=1, anchor="right", shadow=True)
 
         def sample_cubic_bezier(p0, p1, p2, p3, count=40):
             pts = []
