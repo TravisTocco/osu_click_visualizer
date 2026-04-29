@@ -3860,13 +3860,20 @@ def start_ui() -> None:
         circle(img, ball_x, ball_y, 15, "#eeeeee", thickness=2)
 
         obj_x, obj_y, obj_r = 250, 196, 25
+        stream_chain = [(184, 214), (216, 205), (250, 196), (292, 186)]
         if connectors_enabled:
-            sample_chain = [(186, 214), (214, 205), (250, 196), (292, 186)]
             connector_color = "#abb0c0" if visual_style_var.get().strip().lower() == "ghost" else "#8e92a3"
-            for i in range(len(sample_chain) - 1):
-                x0, y0 = sample_chain[i]
-                x1, y1 = sample_chain[i + 1]
-                line(img, x0, y0, x1, y1, connector_color, thickness=1.35)
+            for i in range(len(stream_chain) - 1):
+                x0, y0 = stream_chain[i]
+                x1, y1 = stream_chain[i + 1]
+                line(img, x0, y0, x1, y1, connector_color, thickness=1.55)
+        stream_fill = "#67b0ff" if visual_style_var.get().strip().lower() == "ghost" else "#4d86d9"
+        for idx, (sx, sy) in enumerate(stream_chain):
+            radius = 18 if idx < len(stream_chain) - 1 else obj_r
+            circle(img, sx, sy, radius, stream_fill)
+            circle(img, sx, sy, radius, "#eeeeee", thickness=2)
+            if numbers_enabled:
+                put_text(img, str(idx + 2), sx, sy, color="#ffffff", size=0.50, thickness=2, anchor="center")
         if approach_enabled:
             circle(img, obj_x, obj_y, 68, "#aaaabe", thickness=1.5)
         fill = "#83d676" if visual_style_var.get().strip().lower() == "ghost" else "#58c958"
