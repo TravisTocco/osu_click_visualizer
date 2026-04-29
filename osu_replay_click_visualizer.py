@@ -78,6 +78,7 @@ DEFAULT_CONFIG = {
     "quality_profile": "high",             # "fast", "balanced", "high", "max"
     "performance_mode": "quality",        # "quality", "fast", "turbo", or "custom"
     "custom_draw_background": True,
+    "background_mode": "auto",             # "auto", "dim", "solid", "off"
     "custom_draw_playfield_border": True,
     "custom_draw_approach_circles": True,
     "custom_draw_object_numbers": True,
@@ -416,6 +417,9 @@ DRAW_JUDGMENT_TOTALS = True
 VISUAL_STYLE = str(CONFIG.get("visual_style", "ghost")).strip().lower()
 if VISUAL_STYLE not in ("solid", "ghost"):
     VISUAL_STYLE = "ghost"
+BACKGROUND_MODE = str(CONFIG.get("background_mode", "auto")).strip().lower()
+if BACKGROUND_MODE not in ("auto", "dim", "solid", "off"):
+    BACKGROUND_MODE = "auto"
 GHOST_CIRCLE_ALPHA = 0.45
 GHOST_SLIDER_ALPHA = 0.30
 GHOST_SLIDER_BALL_ALPHA = 0.55
@@ -2156,7 +2160,9 @@ class Renderer:
         self.base_template = self.make_base_template()
 
     def load_background(self) -> Optional[np.ndarray]:
-        if not DRAW_BACKGROUND or not self.beatmap or not self.beatmap.background_filename:
+        if not DRAW_BACKGROUND or BACKGROUND_MODE in ("solid", "off"):
+            return None
+        if not self.beatmap or not self.beatmap.background_filename:
             return None
 
         path = find_file_case_insensitive(self.beatmap.folder, self.beatmap.background_filename)
@@ -2176,7 +2182,8 @@ class Renderer:
         crop = resized[y0:y0 + OUTPUT_HEIGHT, x0:x0 + OUTPUT_WIDTH]
         crop = cv2.GaussianBlur(crop, (0, 0), 5)
         dark = np.zeros_like(crop)
-        return cv2.addWeighted(crop, 1.0 - DARKEN_BACKGROUND, dark, DARKEN_BACKGROUND, 0)
+        dim_strength = min(0.92, DARKEN_BACKGROUND + 0.12) if BACKGROUND_MODE == "dim" else DARKEN_BACKGROUND
+        return cv2.addWeighted(crop, 1.0 - dim_strength, dark, dim_strength, 0)
 
     def pf(self, x: float, y: float) -> Tuple[int, int]:
         return int(round(self.origin_x + x * self.scale)), int(round(self.origin_y + y * self.scale))
@@ -3576,6 +3583,8 @@ def start_ui() -> None:
     data_sheet_var = tk.BooleanVar(value=bool(cfg.get("generate_data_sheet", True)))
     snake_var = tk.StringVar(value=str(cfg.get("snake_in_duration_ms", 450)))
 
+    background_mode_var = tk.StringVar(value=str(cfg.get("background_mode", "auto")).strip().lower())
+
     custom_visual_options = [
         ("Background", "custom_draw_background"),
         ("Playfield border", "custom_draw_playfield_border"),
@@ -3711,13 +3720,25 @@ def start_ui() -> None:
     visual_options_frame.grid(row=0, column=0, sticky="nsew")
     visual_options_frame.grid_columnconfigure(0, weight=1)
 
+    background_frame = ttk.LabelFrame(visual_options_frame, text="Background")
+    background_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
+    background_frame.grid_columnconfigure(1, weight=1)
+    tk.Label(background_frame, text="Background", anchor="w").grid(row=0, column=0, sticky="w", padx=(8, 6), pady=(6, 4))
+    ttk.Combobox(
+        background_frame,
+        textvariable=background_mode_var,
+        values=["auto", "dim", "solid", "off"],
+        state="readonly",
+    ).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(6, 4))
+    tk.Label(background_frame, text="Auto (from beatmap), Dim beatmap, Solid dark, Off", anchor="w", justify="left").grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+
     custom_frame = ttk.LabelFrame(visual_options_frame, text="Custom visual layers (used only when Performance mode = custom)")
-    custom_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
+    custom_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
     for idx, (label, key) in enumerate(custom_visual_options):
         tk.Checkbutton(custom_frame, text=label, variable=custom_visual_vars[key]).grid(row=idx // 2, column=idx % 2, sticky="w", padx=8, pady=2)
 
     judgment_frame = ttk.LabelFrame(visual_options_frame, text="Judgment popup text")
-    judgment_frame.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+    judgment_frame.grid(row=2, column=0, sticky="ew", padx=(0, 6))
     judgment_frame.grid_columnconfigure(0, weight=1, uniform="judgment_cols")
     judgment_frame.grid_columnconfigure(1, weight=1, uniform="judgment_cols")
 
@@ -3892,13 +3913,22 @@ def start_ui() -> None:
 
         img = np.full((H, W, 3), bgr("#07070b"), dtype=np.uint8)
 
-        if bg_enabled:
+        preview_bg_mode = background_mode_var.get().strip().lower()
+        if not bg_enabled or preview_bg_mode == "off":
+            img[:] = bgr("#07070b")
+        elif preview_bg_mode == "solid":
+            img[:] = bgr("#121218")
+        else:
             img[:] = bgr("#10111a")
             circle(img, 100, 70, 210, "#22152e")
             circle(img, 430, 190, 235, "#0c2630")
-            # Darken like the real render background does.
-            dark = np.full_like(img, bgr("#07070b"))
-            img = cv2.addWeighted(img, 0.38, dark, 0.62, 0)
+            line(img, 20, 280, 520, 24, "#1f2b3a", thickness=1.2)
+            if preview_bg_mode == "dim":
+                dark = np.full_like(img, bgr("#050509"))
+                img = cv2.addWeighted(img, 0.23, dark, 0.77, 0)
+            else:
+                dark = np.full_like(img, bgr("#07070b"))
+                img = cv2.addWeighted(img, 0.38, dark, 0.62, 0)
 
         fx0, fy0, fw, fh = 132, 36, 340, 248
         rect(img, fx0, fy0, fx0 + fw, fy0 + fh, "#131318")
@@ -4024,7 +4054,7 @@ def start_ui() -> None:
         visual_style_var, performance_var, judgment_show_great_var, judgment_text_great_var,
         judgment_text_ok_var, judgment_text_meh_var, judgment_text_miss_var,
         judgment_position_var, judgment_offset_x_var, judgment_offset_y_var,
-        judgment_draw_miss_x_var, judgment_show_slider_details_var,
+        judgment_draw_miss_x_var, judgment_show_slider_details_var, background_mode_var,
     ]
     for var in preview_vars:
         try:
@@ -4044,6 +4074,7 @@ def start_ui() -> None:
     snake_desc_var = tk.StringVar()
     visual_style_desc_var = tk.StringVar()
     quality_desc_var = tk.StringVar()
+    background_mode_desc_var = tk.StringVar()
 
     def update_setting_descriptions(*_):
         fps_choice = fps_var.get().strip()
@@ -4094,6 +4125,16 @@ def start_ui() -> None:
         else:
             quality_desc_var.set("Encoder quality profile; higher settings can increase file size and encode work.")
 
+        bg_mode = background_mode_var.get().strip().lower()
+        if bg_mode == "dim":
+            background_mode_desc_var.set("Dim beatmap: keeps background image but applies stronger darkening for readability.")
+        elif bg_mode == "solid":
+            background_mode_desc_var.set("Solid dark: hides beatmap image and uses the fallback dark tone.")
+        elif bg_mode == "off":
+            background_mode_desc_var.set("Off: disables the background layer for the plainest look.")
+        else:
+            background_mode_desc_var.set("Auto: uses the beatmap background image when available.")
+
     def desc_label(row: int, var: tk.StringVar):
         tk.Label(main_frame, textvariable=var, anchor="w", justify="left", wraplength=900).grid(row=row, column=2, columnspan=2, sticky="w", pady=4)
 
@@ -4121,35 +4162,39 @@ def start_ui() -> None:
     ttk.Combobox(main_frame, textvariable=quality_var, values=quality_choices, state="readonly").grid(row=13, column=1, sticky="ew", pady=4)
     desc_label(13, quality_desc_var)
 
-    for var in (fps_var, resolution_var, parallel_var, snake_var, visual_style_var, quality_var):
+    for var in (fps_var, resolution_var, parallel_var, snake_var, visual_style_var, quality_var, background_mode_var):
         try:
             var.trace_add("write", update_setting_descriptions)
         except Exception:
             pass
     update_setting_descriptions()
 
-    row_label(14, "Output folder")
-    tk.Entry(main_frame, textvariable=output_dir_var).grid(row=14, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(output_dir_var)).grid(row=14, column=3, sticky="ew", padx=(6, 0))
+    row_label(14, "Background mode")
+    ttk.Combobox(main_frame, textvariable=background_mode_var, values=["auto", "dim", "solid", "off"], state="readonly").grid(row=14, column=1, sticky="ew", pady=4)
+    desc_label(14, background_mode_desc_var)
 
-    row_label(15, "osu! root folder")
-    tk.Entry(main_frame, textvariable=osu_root_var).grid(row=15, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(osu_root_var)).grid(row=15, column=3, sticky="ew", padx=(6, 0))
+    row_label(15, "Output folder")
+    tk.Entry(main_frame, textvariable=output_dir_var).grid(row=15, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(output_dir_var)).grid(row=15, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(16, "replay/export folder")
-    tk.Entry(main_frame, textvariable=exports_var).grid(row=16, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(exports_var)).grid(row=16, column=3, sticky="ew", padx=(6, 0))
+    row_label(16, "osu! root folder")
+    tk.Entry(main_frame, textvariable=osu_root_var).grid(row=16, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(osu_root_var)).grid(row=16, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(17, "Replay file override (optional .osr)")
-    tk.Entry(main_frame, textvariable=replay_var).grid(row=17, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Choose Replay", command=lambda: browse_file(replay_var, [("osu replay", "*.osr"), ("All files", "*.*")])).grid(row=17, column=3, sticky="ew", padx=(6, 0))
+    row_label(17, "replay/export folder")
+    tk.Entry(main_frame, textvariable=exports_var).grid(row=17, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Browse", command=lambda: browse_dir(exports_var)).grid(row=17, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(18, "Beatmap override (optional .osu or .osz)")
-    tk.Entry(main_frame, textvariable=beatmap_var).grid(row=18, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Choose Beatmap", command=lambda: browse_file(beatmap_var, [("osu beatmap/package", "*.osu *.osz *.zip"), ("osu beatmap", "*.osu"), ("osu package", "*.osz *.zip"), ("All files", "*.*")])).grid(row=18, column=3, sticky="ew", padx=(6, 0))
-    tk.Label(main_frame, text="Tip: For osu!(lazer), selecting the exported .osz package is supported.", anchor="w").grid(row=19, column=1, columnspan=3, sticky="w", pady=(0, 4))
+    row_label(18, "Replay file override (optional .osr)")
+    tk.Entry(main_frame, textvariable=replay_var).grid(row=18, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Choose Replay", command=lambda: browse_file(replay_var, [("osu replay", "*.osr"), ("All files", "*.*")])).grid(row=18, column=3, sticky="ew", padx=(6, 0))
 
-    tk.Label(main_frame, text="Use 'Start Render Now' for the newest existing replay, or 'Watch Exports + Auto Render' to wait for a new export.", anchor="w").grid(row=20, column=0, columnspan=4, sticky="w", pady=(10, 2))
+    row_label(19, "Beatmap override (optional .osu or .osz)")
+    tk.Entry(main_frame, textvariable=beatmap_var).grid(row=19, column=1, columnspan=2, sticky="ew", pady=4)
+    tk.Button(main_frame, text="Choose Beatmap", command=lambda: browse_file(beatmap_var, [("osu beatmap/package", "*.osu *.osz *.zip"), ("osu beatmap", "*.osu"), ("osu package", "*.osz *.zip"), ("All files", "*.*")])).grid(row=19, column=3, sticky="ew", padx=(6, 0))
+    tk.Label(main_frame, text="Tip: For osu!(lazer), selecting the exported .osz package is supported.", anchor="w").grid(row=20, column=1, columnspan=3, sticky="w", pady=(0, 4))
+
+    tk.Label(main_frame, text="Use 'Start Render Now' for the newest existing replay, or 'Watch Exports + Auto Render' to wait for a new export.", anchor="w").grid(row=21, column=0, columnspan=4, sticky="w", pady=(10, 2))
 
     output_box = tk.Text(main_frame, height=32, wrap="word", bg="#111111", fg="#eeeeee", insertbackground="#eeeeee")
     output_box.grid(row=22, column=0, columnspan=4, sticky="nsew", pady=(12, 0))
@@ -4180,6 +4225,8 @@ def start_ui() -> None:
         new_cfg["performance_mode"] = performance_var.get().strip().lower()
         for _, key in custom_visual_options:
             new_cfg[key] = bool(custom_visual_vars[key].get())
+        bg_mode = background_mode_var.get().strip().lower()
+        new_cfg["background_mode"] = bg_mode if bg_mode in ("auto", "dim", "solid", "off") else "auto"
 
         new_cfg["judgment_show_great"] = bool(judgment_show_great_var.get())
         new_cfg["judgment_text_great"] = judgment_text_great_var.get()
