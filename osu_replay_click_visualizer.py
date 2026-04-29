@@ -2162,6 +2162,11 @@ class Renderer:
     def load_background(self) -> Optional[np.ndarray]:
         if not DRAW_BACKGROUND or BACKGROUND_MODE in ("solid", "off"):
             return None
+        if BACKGROUND_MODE == "dim":
+            stylized = self.make_stylized_solid_background()
+            dark = np.zeros_like(stylized)
+            dim_strength = min(0.92, DARKEN_BACKGROUND + 0.12)
+            return cv2.addWeighted(stylized, 1.0 - dim_strength, dark, dim_strength, 0)
         if not self.beatmap or not self.beatmap.background_filename:
             return None
 
@@ -2182,8 +2187,23 @@ class Renderer:
         crop = resized[y0:y0 + OUTPUT_HEIGHT, x0:x0 + OUTPUT_WIDTH]
         crop = cv2.GaussianBlur(crop, (0, 0), 5)
         dark = np.zeros_like(crop)
-        dim_strength = min(0.92, DARKEN_BACKGROUND + 0.12) if BACKGROUND_MODE == "dim" else DARKEN_BACKGROUND
-        return cv2.addWeighted(crop, 1.0 - dim_strength, dark, dim_strength, 0)
+        return cv2.addWeighted(crop, 1.0 - DARKEN_BACKGROUND, dark, DARKEN_BACKGROUND, 0)
+
+    def make_stylized_solid_background(self) -> np.ndarray:
+        """Generate an osu!-style abstract background for solid mode."""
+        img = np.zeros((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), dtype=np.uint8)
+        top = np.array((30, 22, 50), dtype=np.float32)
+        bottom = np.array((14, 12, 24), dtype=np.float32)
+        grad = np.linspace(0.0, 1.0, OUTPUT_HEIGHT, dtype=np.float32)[:, None]
+        row_colors = (top * (1.0 - grad) + bottom * grad).astype(np.uint8)
+        img[:] = row_colors[:, None, :]
+
+        overlay = img.copy()
+        cv2.circle(overlay, (int(OUTPUT_WIDTH * 0.24), int(OUTPUT_HEIGHT * 0.28)), int(min(OUTPUT_WIDTH, OUTPUT_HEIGHT) * 0.32), (56, 34, 92), -1, cv2.LINE_AA)
+        cv2.circle(overlay, (int(OUTPUT_WIDTH * 0.75), int(OUTPUT_HEIGHT * 0.62)), int(min(OUTPUT_WIDTH, OUTPUT_HEIGHT) * 0.38), (28, 56, 92), -1, cv2.LINE_AA)
+        cv2.addWeighted(overlay, 0.72, img, 0.28, 0, img)
+        cv2.line(img, (0, int(OUTPUT_HEIGHT * 0.84)), (OUTPUT_WIDTH, int(OUTPUT_HEIGHT * 0.22)), (46, 64, 110), max(2, OUTPUT_HEIGHT // 360), cv2.LINE_AA)
+        return img
 
     def pf(self, x: float, y: float) -> Tuple[int, int]:
         return int(round(self.origin_x + x * self.scale)), int(round(self.origin_y + y * self.scale))
@@ -2288,7 +2308,10 @@ class Renderer:
         cv2.addWeighted(overlay, alpha, roi, 1.0 - alpha, 0.0, roi)
 
     def make_base_template(self) -> np.ndarray:
-        img = self.background.copy() if self.background is not None else np.full((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), COLOR_BG, dtype=np.uint8)
+        if BACKGROUND_MODE == "solid" and DRAW_BACKGROUND:
+            img = self.make_stylized_solid_background()
+        else:
+            img = self.background.copy() if self.background is not None else np.full((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), COLOR_BG, dtype=np.uint8)
         self.draw_field(img)
         return img
 
@@ -3906,19 +3929,24 @@ def start_ui() -> None:
             # Off = plain near-black output (no simulated background texture).
             img[:] = bgr("#030306")
         elif preview_bg_mode == "solid":
-            # Solid = intentionally distinct flat tone so it is easy to tell from Off.
-            img[:] = bgr("#1f2633")
+            img[:] = bgr("#151126")
+            circle(img, 120, 88, 220, "#5f2d97")
+            circle(img, 440, 205, 250, "#245f9a")
+            line(img, 0, 258, 540, 52, "#365fbb", thickness=2.0)
+        elif preview_bg_mode == "dim":
+            img[:] = bgr("#151126")
+            circle(img, 120, 88, 220, "#5f2d97")
+            circle(img, 440, 205, 250, "#245f9a")
+            line(img, 0, 258, 540, 52, "#365fbb", thickness=2.0)
+            dark = np.full_like(img, bgr("#050508"))
+            img = cv2.addWeighted(img, 0.22, dark, 0.78, 0)
         else:
             img[:] = bgr("#10111a")
             circle(img, 100, 70, 210, "#22152e")
             circle(img, 430, 190, 235, "#0c2630")
             line(img, 20, 280, 520, 24, "#1f2b3a", thickness=1.2)
-            if preview_bg_mode == "dim":
-                dark = np.full_like(img, bgr("#050509"))
-                img = cv2.addWeighted(img, 0.23, dark, 0.77, 0)
-            else:
-                dark = np.full_like(img, bgr("#07070b"))
-                img = cv2.addWeighted(img, 0.38, dark, 0.62, 0)
+            dark = np.full_like(img, bgr("#07070b"))
+            img = cv2.addWeighted(img, 0.38, dark, 0.62, 0)
 
         fx0, fy0, fw, fh = 132, 36, 340, 248
         field_fill = "#131318"
