@@ -1079,6 +1079,38 @@ def extract_matching_osu_from_osz(osz_path: Path, member: str, beatmap_hash: str
     return None
 
 
+def resolve_selected_beatmap_override(path: Path, beatmap_hash: str) -> Path:
+    suffix = path.suffix.lower()
+    if suffix == ".osu":
+        return path
+    if suffix not in (".osz", ".zip"):
+        raise RuntimeError(f"Unsupported beatmap override format: {path.name}. Use .osu or .osz.")
+
+    target_hash = (beatmap_hash or "").strip().lower()
+    with zipfile.ZipFile(path, "r") as zf:
+        osu_members = [name for name in zf.namelist() if name.lower().endswith(".osu")]
+        if not osu_members:
+            raise RuntimeError(f"No .osu difficulties found inside: {path}")
+
+        if target_hash:
+            for member in osu_members:
+                try:
+                    data = zf.read(member)
+                except KeyError:
+                    continue
+                if hashlib.md5(data).hexdigest().lower() == target_hash:
+                    resolved = extract_matching_osu_from_osz(path, member, beatmap_hash)
+                    if resolved:
+                        return resolved
+
+        fallback_member = osu_members[0]
+        print("Beatmap override .osz did not contain an exact replay hash match; using the first difficulty in the package.")
+        resolved = extract_matching_osu_from_osz(path, fallback_member, beatmap_hash or "manual")
+        if resolved:
+            return resolved
+    raise RuntimeError(f"Could not extract .osu from selected package: {path}")
+
+
 def find_beatmap_in_osz_exports(beatmap_hash: str, replay_path: Path) -> Optional[Path]:
     target = beatmap_hash.lower()
     song_hint, diff_hint = replay_name_hints(replay_path)
@@ -1146,7 +1178,7 @@ def find_beatmap(osu_folder: Path, beatmap_hash: str, replay_path: Path) -> Opti
     if BEATMAP_PATH.strip():
         p = Path(BEATMAP_PATH).expanduser()
         if p.exists():
-            return p
+            return resolve_selected_beatmap_override(p, beatmap_hash)
         raise FileNotFoundError(f"BEATMAP_PATH does not exist: {p}")
 
     songs = osu_folder / "Songs"
@@ -3941,13 +3973,14 @@ def start_ui() -> None:
     tk.Entry(main_frame, textvariable=exports_var).grid(row=16, column=1, columnspan=2, sticky="ew", pady=4)
     tk.Button(main_frame, text="Browse", command=lambda: browse_dir(exports_var)).grid(row=16, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(17, "specific replay .osr optional")
+    row_label(17, "Replay file override (optional .osr)")
     tk.Entry(main_frame, textvariable=replay_var).grid(row=17, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_file(replay_var, [("osu replay", "*.osr"), ("All files", "*.*")])).grid(row=17, column=3, sticky="ew", padx=(6, 0))
+    tk.Button(main_frame, text="Choose Replay", command=lambda: browse_file(replay_var, [("osu replay", "*.osr"), ("All files", "*.*")])).grid(row=17, column=3, sticky="ew", padx=(6, 0))
 
-    row_label(18, "specific beatmap .osu optional")
+    row_label(18, "Beatmap override (optional .osu or .osz)")
     tk.Entry(main_frame, textvariable=beatmap_var).grid(row=18, column=1, columnspan=2, sticky="ew", pady=4)
-    tk.Button(main_frame, text="Browse", command=lambda: browse_file(beatmap_var, [("osu beatmap", "*.osu"), ("All files", "*.*")])).grid(row=18, column=3, sticky="ew", padx=(6, 0))
+    tk.Button(main_frame, text="Choose Beatmap", command=lambda: browse_file(beatmap_var, [("osu beatmap/package", "*.osu *.osz *.zip"), ("osu beatmap", "*.osu"), ("osu package", "*.osz *.zip"), ("All files", "*.*")])).grid(row=18, column=3, sticky="ew", padx=(6, 0))
+    tk.Label(main_frame, text="Tip: For osu!(lazer), selecting the exported .osz package is supported.", anchor="w").grid(row=19, column=1, columnspan=3, sticky="w", pady=(0, 4))
 
     tk.Label(main_frame, text="Use 'Start Render Now' for the newest existing replay, or 'Watch Exports + Auto Render' to wait for a new export.", anchor="w").grid(row=20, column=0, columnspan=4, sticky="w", pady=(10, 2))
 
@@ -4143,7 +4176,7 @@ def run_chunk_renderer_main() -> None:
     beatmap = None
     beatmap_path = Path(BEATMAP_PATH).expanduser() if BEATMAP_PATH else None
     if beatmap_path and beatmap_path.exists():
-        beatmap = parse_beatmap(beatmap_path)
+        beatmap = parse_beatmap(resolve_selected_beatmap_override(beatmap_path, replay.beatmap_hash))
     else:
         found = find_beatmap(osu_folder, replay.beatmap_hash, replay_path)
         if found:
