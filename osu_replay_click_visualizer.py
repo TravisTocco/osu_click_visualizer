@@ -40,6 +40,11 @@ import numpy as np
 from osrparse import Replay
 
 try:
+    cv2.setUseOptimized(True)
+except Exception:
+    pass
+
+try:
     import imageio_ffmpeg
 except ImportError:
     imageio_ffmpeg = None
@@ -65,7 +70,7 @@ except Exception:
 # USER SETTINGS
 # ============================================================
 
-SCRIPT_VERSION = "osu_replay_click_visualizer_v32_preview_right_smooth"
+SCRIPT_VERSION = "osu_replay_click_visualizer_v32_preview_right_smooth_beatmap_required"
 
 # ------------------------------------------------------------
 # Config / portability
@@ -94,6 +99,8 @@ DEFAULT_CONFIG = {
     "custom_draw_stream_connectors": True,
     "custom_draw_judgments": True,
     "custom_draw_judgment_totals": True,
+    "left_click_label": "M1",
+    "right_click_label": "M2",
     "judgment_show_great": False,
     "judgment_text_great": "Great",
     "judgment_text_ok": "100",
@@ -327,40 +334,26 @@ def apply_quality_profile() -> None:
         X264_RENDER_CRF = 18
 
 
-MAX_PARALLEL_WORKERS = max(2, min(32, (os.cpu_count() or 2) * 2))
-
-
 def resolve_parallel_workers() -> int:
     if "--render-chunk" in sys.argv:
         return 1
     if PARALLEL_WORKERS_CONFIG > 0:
-        # More workers can speed up CPU-heavy renders, but too many may overload Windows/NVENC/disk IO.
-        return max(1, min(MAX_PARALLEL_WORKERS, PARALLEL_WORKERS_CONFIG))
-    # Auto: conservative default. This keeps the PC usable and avoids NVENC/session/disk overload.
-    cpu = os.cpu_count() or 2
-    return max(1, min(4, cpu // 2))
-    global NVENC_RENDER_PRESET, NVENC_RENDER_QP, X264_RENDER_PRESET, X264_RENDER_CRF
-    # Friendly presets exposed in the UI. Lower QP/CRF = better quality, larger file.
-    if QUALITY_PROFILE == "fast":
-        NVENC_RENDER_PRESET = "p1"
-        NVENC_RENDER_QP = 24
-        X264_RENDER_PRESET = "ultrafast"
-        X264_RENDER_CRF = 25
-    elif QUALITY_PROFILE == "balanced":
-        NVENC_RENDER_PRESET = "p1"
-        NVENC_RENDER_QP = 21
-        X264_RENDER_PRESET = "veryfast"
-        X264_RENDER_CRF = 22
-    elif QUALITY_PROFILE == "max":
-        NVENC_RENDER_PRESET = "p4"
-        NVENC_RENDER_QP = 14
-        X264_RENDER_PRESET = "slow"
-        X264_RENDER_CRF = 14
-    else:  # high
-        NVENC_RENDER_PRESET = "p1"
-        NVENC_RENDER_QP = 18
-        X264_RENDER_PRESET = "veryfast"
-        X264_RENDER_CRF = 18
+        # Manual values are honored; NVENC overload is handled by the retry-down path.
+        workers = max(1, PARALLEL_WORKERS_CONFIG)
+    else:
+        # Auto: conservative default. This keeps the PC usable and avoids NVENC/session/disk overload.
+        cpu = os.cpu_count() or 2
+        workers = max(1, min(4, cpu // 2))
+
+    return workers
+
+
+def next_lower_worker_count(workers: int) -> int:
+    if workers <= 1:
+        return 1
+    return max(1, workers // 2)
+
+
 
 
 apply_quality_profile()
@@ -448,8 +441,13 @@ SNAKE_IN_DURATION_MS = int(CONFIG.get("snake_in_duration_ms", 450))
 FOLLOW_CIRCLE_RADIUS_SCALE = 2.2
 SLIDER_BALL_RADIUS_SCALE = 0.90
 
-LABEL_K1 = "A"
-LABEL_K2 = "D"
+def normalize_click_label(value: str, default: str) -> str:
+    text = str(value or default).strip()
+    return text[:8] if text else default
+
+
+LABEL_K1 = normalize_click_label(CONFIG.get("left_click_label", "M1"), "M1")
+LABEL_K2 = normalize_click_label(CONFIG.get("right_click_label", "M2"), "M2")
 PULSE_DURATION_MS = 360
 FLASH_DURATION_MS = 90
 TRAIL_MS = 160
@@ -731,7 +729,7 @@ class ReplayCandidate:
 
 
 class FFmpegVideoWriter:
-    def __init__(self, path: str, width: int, height: int, fps: int):
+    def __init__(self, path: str, width: int, height: int, fps: int, faststart: bool = True):
         if imageio_ffmpeg is None:
             raise RuntimeError("imageio-ffmpeg is required. Install: pip install imageio-ffmpeg")
 
@@ -774,7 +772,9 @@ class FFmpegVideoWriter:
             "-an",
         ]
         cmd.extend(encoder_args)
-        cmd.extend(["-movflags", "+faststart", self.path])
+        if faststart:
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(self.path)
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
     def write(self, frame: np.ndarray) -> None:
@@ -784,7 +784,9 @@ class FFmpegVideoWriter:
             )
         if self.proc.stdin is None:
             raise RuntimeError("FFmpeg stdin is closed.")
-        self.proc.stdin.write(frame.tobytes())
+        if not frame.flags["C_CONTIGUOUS"]:
+            frame = np.ascontiguousarray(frame)
+        self.proc.stdin.write(memoryview(frame))
 
     def release(self) -> None:
         if self.proc.stdin:
@@ -908,7 +910,17 @@ def newest_changed_file(before: Dict[str, float], after: Dict[str, float]) -> Op
     return Path(changed[0][1])
 
 
+def exports_folder_for_replay(replay_path: Path) -> str:
+    try:
+        if replay_path.parent.name.lower() == "exports":
+            return str(replay_path.parent)
+    except Exception:
+        pass
+    return REPLAY_FOLDER or str(replay_path.parent)
+
+
 def print_missing_osz_export_steps(replay_path: Path) -> None:
+    exports_dir = exports_folder_for_replay(replay_path)
     print()
     print("Could not find the matching .osz beatmap package yet.")
     print("The visualizer can wait while you export it from osu!lazer.")
@@ -924,27 +936,42 @@ def print_missing_osz_export_steps(replay_path: Path) -> None:
     print("  7. Wait for osu! to save the export.")
     print()
     print("The visualizer is watching your exports folder and will continue automatically.")
-    print("Exports folder:", REPLAY_FOLDER)
+    print("Exports folder:", exports_dir)
     print()
 
 
+def replay_looks_like_lazer_export(replay_path: Path) -> bool:
+    try:
+        if replay_path.parent.name.lower() == "exports":
+            return True
+    except Exception:
+        pass
+    try:
+        if Path(REPLAY_FOLDER).name.lower() == "exports":
+            return True
+    except Exception:
+        pass
+    return normalize_osu_install_type(OSU_INSTALL_TYPE) != "stable"
+
+
 def wait_for_user_exported_osz(replay_path: Path) -> Optional[Path]:
-    if normalize_osu_install_type(OSU_INSTALL_TYPE) == "stable":
+    if not replay_looks_like_lazer_export(replay_path):
         print("Matching .osu beatmap was not found in the stable Songs folder.")
         print("Set the osu! root folder to your stable osu! install, or set specific beatmap .osu optional.")
         return None
     if not GUIDE_MISSING_OSZ_EXPORT:
         return None
-    if not REPLAY_FOLDER or not Path(REPLAY_FOLDER).exists():
-        print("Cannot guide .osz export because the exports folder was not found:", REPLAY_FOLDER)
+    exports_dir = exports_folder_for_replay(replay_path)
+    if not exports_dir or not Path(exports_dir).exists():
+        print("Cannot guide .osz export because the exports folder was not found:", exports_dir)
         return None
 
     print_missing_osz_export_steps(replay_path)
-    before_osz = export_files_snapshot(REPLAY_FOLDER, ".osz")
+    before_osz = export_files_snapshot(exports_dir, ".osz")
     last_status = 0.0
 
     while True:
-        after_osz = export_files_snapshot(REPLAY_FOLDER, ".osz")
+        after_osz = export_files_snapshot(exports_dir, ".osz")
         new_osz = newest_changed_file(before_osz, after_osz)
         if new_osz:
             print("Detected new/updated .osz export:", new_osz)
@@ -955,6 +982,19 @@ def wait_for_user_exported_osz(replay_path: Path) -> Optional[Path]:
             print("Still waiting for .osz export... export the beatmap as File > Export > For compatibility (.osz)")
             last_status = now
         time.sleep(1.0)
+
+
+def missing_beatmap_message(replay_path: Path, osu_folder: Path) -> str:
+    if replay_looks_like_lazer_export(replay_path):
+        exports_dir = exports_folder_for_replay(replay_path)
+        return (
+            "Could not find the matching .osu beatmap. Export the matching beatmap from osu!lazer as "
+            f"File > Export > For compatibility (.osz), then place it with the replay in: {exports_dir}"
+        )
+    return (
+        "Could not find the matching .osu beatmap in the stable Songs folder. "
+        f"Set the osu! root folder to the stable install that owns this replay, or set beatmap_path directly. osu folder checked: {osu_folder}"
+    )
 
 
 def wait_for_new_exports() -> Optional[Path]:
@@ -1061,6 +1101,62 @@ def osu_metadata_from_bytes(data: bytes) -> Dict[str, str]:
     return meta
 
 
+def score_osu_member_for_replay(member: str, data: bytes, replay_path: Optional[Path], osz_path: Optional[Path] = None) -> int:
+    if replay_path is None:
+        return 0
+
+    song_hint, diff_hint = replay_name_hints(replay_path)
+    if not song_hint and not diff_hint:
+        return 0
+
+    meta = osu_metadata_from_bytes(data)
+    version = norm_text(meta.get("Version", ""))
+    member_norm = norm_text(Path(member).stem)
+    osz_norm = norm_text(osz_path.stem) if osz_path else ""
+    title_norm = norm_text(meta.get("Artist", "") + " " + meta.get("Title", ""))
+    creator_norm = norm_text(meta.get("Creator", ""))
+
+    score = 0
+    if diff_hint:
+        if diff_hint == version:
+            score += 220
+        elif diff_hint and diff_hint in version:
+            score += 170
+        elif diff_hint in member_norm:
+            score += 140
+
+    if song_hint:
+        if title_norm and (title_norm in song_hint or song_hint in title_norm):
+            score += 80
+        if osz_norm and (song_hint in osz_norm or osz_norm in song_hint):
+            score += 45
+        if member_norm and song_hint in member_norm:
+            score += 35
+
+    # Tiny tie-breakers only; never let mapper names outweigh difficulty/title.
+    if creator_norm and creator_norm in member_norm:
+        score += 2
+
+    return score
+
+
+def choose_replay_hint_osu_member(zf: zipfile.ZipFile, osu_members: List[str], replay_path: Optional[Path], osz_path: Optional[Path] = None) -> Tuple[Optional[str], int]:
+    best_member = None
+    best_score = -1
+
+    for member in osu_members:
+        try:
+            data = zf.read(member)
+        except KeyError:
+            continue
+        score = score_osu_member_for_replay(member, data, replay_path, osz_path)
+        if score > best_score:
+            best_score = score
+            best_member = member
+
+    return best_member, best_score
+
+
 def osz_files_to_search() -> List[Path]:
     folders: List[Path] = []
 
@@ -1108,7 +1204,7 @@ def extract_matching_osu_from_osz(osz_path: Path, member: str, beatmap_hash: str
     return None
 
 
-def resolve_selected_beatmap_override(path: Path, beatmap_hash: str) -> Path:
+def resolve_selected_beatmap_override(path: Path, beatmap_hash: str, replay_path: Optional[Path] = None) -> Path:
     suffix = path.suffix.lower()
     if suffix == ".osu":
         return path
@@ -1132,8 +1228,18 @@ def resolve_selected_beatmap_override(path: Path, beatmap_hash: str) -> Path:
                     if resolved:
                         return resolved
 
-        fallback_member = osu_members[0]
-        print("Beatmap override .osz did not contain an exact replay hash match; using the first difficulty in the package.")
+        fallback_member, fallback_score = choose_replay_hint_osu_member(zf, osu_members, replay_path, path)
+        if fallback_member and fallback_score >= 100:
+            print(
+                "Beatmap override .osz did not contain an exact replay hash match; "
+                f"using replay filename/difficulty fallback: {Path(fallback_member).name} (score {fallback_score})."
+            )
+        else:
+            fallback_member = osu_members[0]
+            print(
+                "Beatmap override .osz did not contain an exact replay hash match and no confident replay filename/difficulty fallback was found; "
+                "using the first difficulty in the package."
+            )
         resolved = extract_matching_osu_from_osz(path, fallback_member, beatmap_hash or "manual")
         if resolved:
             return resolved
@@ -1166,25 +1272,7 @@ def find_beatmap_in_osz_exports(beatmap_hash: str, replay_path: Path) -> Optiona
                     if md5_bytes(data).lower() == target:
                         return extract_matching_osu_from_osz(osz_path, member, beatmap_hash)
 
-                    meta = osu_metadata_from_bytes(data)
-                    version = norm_text(meta.get("Version", ""))
-                    member_norm = norm_text(Path(member).stem)
-                    osz_norm = norm_text(osz_path.stem)
-                    title_norm = norm_text(meta.get("Artist", "") + " " + meta.get("Title", ""))
-
-                    score = 0
-
-                    if diff_hint and (diff_hint == version or diff_hint in member_norm):
-                        score += 100
-                    if song_hint and (
-                        song_hint in osz_norm
-                        or osz_norm in song_hint
-                        or title_norm in song_hint
-                        or song_hint in title_norm
-                    ):
-                        score += 40
-                    if diff_hint and diff_hint in member_norm:
-                        score += 25
+                    score = score_osu_member_for_replay(member, data, replay_path, osz_path)
 
                     if score > fallback_score:
                         fallback_score = score
@@ -1194,7 +1282,7 @@ def find_beatmap_in_osz_exports(beatmap_hash: str, replay_path: Path) -> Optiona
             print(f"  skipped {osz_path.name}: {exc}")
             continue
 
-    if fallback_best and fallback_score >= 80:
+    if fallback_best and fallback_score >= 100:
         osz_path, member = fallback_best
         print(f"No exact hash match; using filename/difficulty fallback with score {fallback_score}.")
         return extract_matching_osu_from_osz(osz_path, member, beatmap_hash)
@@ -1207,7 +1295,7 @@ def find_beatmap(osu_folder: Path, beatmap_hash: str, replay_path: Path) -> Opti
     if BEATMAP_PATH.strip():
         p = Path(BEATMAP_PATH).expanduser()
         if p.exists():
-            return resolve_selected_beatmap_override(p, beatmap_hash)
+            return resolve_selected_beatmap_override(p, beatmap_hash, replay_path)
         raise FileNotFoundError(f"BEATMAP_PATH does not exist: {p}")
 
     songs = osu_folder / "Songs"
@@ -1648,7 +1736,7 @@ def parse_replay_frames(replay: Replay) -> Tuple[List[ReplayFrame], List[ClickEv
         return frames, keyboard_clicks
 
     if USE_MOUSE_BUTTON_FALLBACK_FOR_CLICKS and mouse_clicks:
-        print("No K1/K2 keyboard taps found; using M1/M2 replay presses as A/D fallback.")
+        print(f"No K1/K2 keyboard taps found; using M1/M2 replay presses as {LABEL_K1}/{LABEL_K2} fallback.")
         return frames, mouse_clicks
 
     return frames, keyboard_clicks
@@ -2169,6 +2257,10 @@ class Renderer:
 
         self.background = self.load_background()
         self.base_template = self.make_base_template()
+        self.frame_buffer = np.empty_like(self.base_template)
+        self.frame_points = [self.pf(f.x, f.y) for f in self.frames]
+        self.click_points = [self.pf(c.x, c.y) for c in self.clicks]
+        self.object_points = {obj.index: self.pf(obj.x, obj.y) for obj in self.objects}
 
     def load_background(self) -> Optional[np.ndarray]:
         if not DRAW_BACKGROUND or BACKGROUND_MODE == "off":
@@ -2236,6 +2328,12 @@ class Renderer:
 
     def pf(self, x: float, y: float) -> Tuple[int, int]:
         return int(round(self.origin_x + x * self.scale)), int(round(self.origin_y + y * self.scale))
+
+    def object_point(self, obj: HitObject) -> Tuple[int, int]:
+        point = self.object_points.get(obj.index)
+        if point is not None:
+            return point
+        return self.pf(obj.x, obj.y)
 
     def frame_at_song_time(self, song_t: int) -> ReplayFrame:
         replay_t = song_t - self.replay_to_song_offset
@@ -2336,13 +2434,45 @@ class Renderer:
         cv2.circle(overlay, (cx - x0, cy - y0), radius, color, thickness, cv2.LINE_AA)
         cv2.addWeighted(overlay, alpha, roi, 1.0 - alpha, 0.0, roi)
 
+    def draw_line_alpha(self, img, p0, p1, color, thickness, alpha):
+        alpha = max(0.0, min(1.0, float(alpha)))
+        if alpha <= 0.001:
+            return
+        if alpha >= 0.999:
+            cv2.line(img, p0, p1, color, thickness, cv2.LINE_AA)
+            return
+
+        h, w = img.shape[:2]
+        x_min = min(int(p0[0]), int(p1[0]))
+        x_max = max(int(p0[0]), int(p1[0]))
+        y_min = min(int(p0[1]), int(p1[1]))
+        y_max = max(int(p0[1]), int(p1[1]))
+        pad = max(4, int(thickness) + 4)
+        x0, y0 = max(0, x_min - pad), max(0, y_min - pad)
+        x1, y1 = min(w, x_max + pad + 1), min(h, y_max + pad + 1)
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        roi = img[y0:y1, x0:x1]
+        overlay = roi.copy()
+        cv2.line(
+            overlay,
+            (int(p0[0]) - x0, int(p0[1]) - y0),
+            (int(p1[0]) - x0, int(p1[1]) - y0),
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+        cv2.addWeighted(overlay, alpha, roi, 1.0 - alpha, 0.0, roi)
+
     def make_base_template(self) -> np.ndarray:
         img = self.background.copy() if self.background is not None else np.full((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), COLOR_BG, dtype=np.uint8)
         self.draw_field(img)
         return img
 
     def base_frame(self) -> np.ndarray:
-        return self.base_template.copy()
+        np.copyto(self.frame_buffer, self.base_template)
+        return self.frame_buffer
 
     def draw_field(self, img):
         overlay = img.copy()
@@ -2453,7 +2583,7 @@ class Renderer:
         if age < 0 or age > JUDGMENT_TEXT_MS:
             return
 
-        px, py = self.pf(obj.x, obj.y)
+        px, py = self.object_point(obj)
         main_color = judgment_color(j.result)
         label = judgment_label(j.result).strip()
 
@@ -2535,7 +2665,7 @@ class Renderer:
                     self.draw_object_judgment(img, obj, song_t)
                     continue
 
-            px, py = self.pf(obj.x, obj.y)
+            px, py = self.object_point(obj)
             color = self.object_color(obj)
 
             if obj.kind == "slider":
@@ -2587,8 +2717,6 @@ class Renderer:
         motion_thickness = max(1, thickness + 1)
         lines_drawn = 0
 
-        overlay = img.copy()
-        motion_overlay = img.copy()
         for i in range(len(candidates) - 1):
             if lines_drawn >= STREAM_CONNECTOR_FRAME_LIMIT:
                 break
@@ -2600,9 +2728,9 @@ class Renderer:
             dist = math.hypot(b.x - a.x, b.y - a.y)
             if dist > STREAM_CONNECTOR_MAX_DIST:
                 continue
-            ax, ay = self.pf(a.x, a.y)
-            bx, by = self.pf(b.x, b.y)
-            cv2.line(overlay, (ax, ay), (bx, by), connector_color, thickness, cv2.LINE_AA)
+            ax, ay = self.object_point(a)
+            bx, by = self.object_point(b)
+            self.draw_line_alpha(img, (ax, ay), (bx, by), connector_color, thickness, alpha)
 
             progress = 0.0 if dt <= 0 else max(0.0, min(1.0, (song_t - a.t) / float(dt)))
             seg_half = STREAM_CONNECTOR_MOTION_WINDOW * 0.5
@@ -2613,12 +2741,8 @@ class Renderer:
                 sy0 = int(round(ay + (by - ay) * p0))
                 sx1 = int(round(ax + (bx - ax) * p1))
                 sy1 = int(round(ay + (by - ay) * p1))
-                cv2.line(motion_overlay, (sx0, sy0), (sx1, sy1), connector_color, motion_thickness, cv2.LINE_AA)
+                self.draw_line_alpha(img, (sx0, sy0), (sx1, sy1), connector_color, motion_thickness, motion_alpha)
             lines_drawn += 1
-
-        if lines_drawn > 0:
-            cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
-            cv2.addWeighted(motion_overlay, motion_alpha, img, 1.0 - motion_alpha, 0, img)
 
     def estimate_stream_connector_pairs(self) -> int:
         if not self.objects:
@@ -2651,7 +2775,8 @@ class Renderer:
         for i, f in enumerate(self.frames[idx0:idx1]):
             alpha = i / max(1, idx1 - idx0 - 1)
             radius = max(1, int(2 + 3 * alpha))
-            px, py = self.pf(f.x, f.y)
+            point_idx = idx0 + i
+            px, py = self.frame_points[point_idx] if 0 <= point_idx < len(self.frame_points) else self.pf(f.x, f.y)
             cv2.circle(img, (px, py), radius, (155, 155, 160), -1)
 
     def draw_cursor(self, img, f: ReplayFrame):
@@ -2660,10 +2785,8 @@ class Renderer:
 
         if CURSOR_STYLE == "bright":
             # Bright yellow "dot cursor" like common osu skin cursor choices.
-            glow_overlay = img.copy()
-            cv2.circle(glow_overlay, (px, py), int(round(17 * size)), (110, 215, 255), -1, cv2.LINE_AA)
-            cv2.circle(glow_overlay, (px, py), int(round(11 * size)), (130, 235, 255), -1, cv2.LINE_AA)
-            cv2.addWeighted(glow_overlay, 0.22, img, 0.78, 0, img)
+            self.draw_filled_circle_alpha(img, (px, py), int(round(17 * size)), (110, 215, 255), 0.22)
+            self.draw_filled_circle_alpha(img, (px, py), int(round(11 * size)), (130, 235, 255), 0.22)
             cv2.circle(img, (px, py), int(round(7 * size)), (150, 240, 255), -1, cv2.LINE_AA)
             cv2.circle(img, (px, py), int(round(4 * size)), (220, 255, 255), -1, cv2.LINE_AA)
             return
@@ -2711,7 +2834,7 @@ class Renderer:
                 continue
 
             u = age / float(PULSE_DURATION_MS)
-            px, py = self.pf(c.x, c.y)
+            px, py = self.click_points[i] if 0 <= i < len(self.click_points) else self.pf(c.x, c.y)
             color = COLOR_K1 if c.key == LABEL_K1 else COLOR_K2
             radius = int(18 + 56 * u)
             thickness = max(1, int(5 * (1 - u)) + 1)
@@ -2741,7 +2864,9 @@ class Renderer:
             x0 = x + i * (w + gap)
             cv2.rectangle(img, (x0, y), (x0 + w, y + h), COLOR_HELD if held else COLOR_UP, -1)
             cv2.rectangle(img, (x0, y), (x0 + w, y + h), color, 2)
-            self.draw_text(img, label, x0 + 21, y + 34, scale=1.0, thickness=2)
+            scale = 0.92 if len(label) <= 2 else 0.72
+            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+            self.draw_text(img, label, x0 + (w - text_w) // 2, y + (h + text_h) // 2, scale=scale, thickness=2)
 
     def draw_timeline(self, img, song_t: int):
         if not DRAW_TIMELINE:
@@ -2752,9 +2877,10 @@ class Renderer:
         y0 = OUTPUT_HEIGHT - 66
         y1 = OUTPUT_HEIGHT - 22
 
-        overlay = img.copy()
-        cv2.rectangle(overlay, (x0, y0), (x1, y1), COLOR_PANEL, -1)
-        cv2.addWeighted(overlay, 0.78, img, 0.22, 0, img)
+        roi = img[y0:y1 + 1, x0:x1 + 1]
+        overlay = roi.copy()
+        overlay[:] = COLOR_PANEL
+        cv2.addWeighted(overlay, 0.78, roi, 0.22, 0, roi)
         cv2.rectangle(img, (x0, y0), (x1, y1), COLOR_GRID, 1)
 
         self.draw_text(img, LABEL_K1, x0 + 8, y0 + 17, scale=0.42, thickness=1, color=COLOR_K1)
@@ -2869,7 +2995,8 @@ class Renderer:
 
     def render_silent_range(self, output_path: str, start_t: int, end_t: int, progress_label: str = "") -> None:
         total_frames = max(1, int(math.ceil((end_t - start_t) / 1000.0 * OUTPUT_FPS)))
-        writer = FFmpegVideoWriter(output_path, OUTPUT_WIDTH, OUTPUT_HEIGHT, OUTPUT_FPS)
+        is_chunk = bool(progress_label) or Path(output_path).name.startswith("chunk_")
+        writer = FFmpegVideoWriter(output_path, OUTPUT_WIDTH, OUTPUT_HEIGHT, OUTPUT_FPS, faststart=not is_chunk)
 
         print()
         label = f" {progress_label}" if progress_label else ""
@@ -3168,7 +3295,26 @@ class Renderer:
         if workers <= 1:
             self.render_silent_range(TEMP_VIDEO_PATH, start_t, end_t)
         else:
-            self.render_silent_parallel(start_t, end_t, workers)
+            current_workers = workers
+            while True:
+                if current_workers <= 1:
+                    self.render_silent_range(TEMP_VIDEO_PATH, start_t, end_t)
+                    break
+                try:
+                    self.render_silent_parallel(start_t, end_t, current_workers)
+                    break
+                except RuntimeError:
+                    if RENDER_ENCODER != "h264_nvenc" or current_workers <= 1:
+                        raise
+                    retry_workers = next_lower_worker_count(current_workers)
+                    if retry_workers >= current_workers:
+                        raise
+                    print()
+                    print(
+                        "Parallel NVENC render failed. Retrying with fewer workers "
+                        f"({current_workers} -> {retry_workers}) to avoid encoder session overload."
+                    )
+                    current_workers = retry_workers
 
         return start_t, end_t
 
@@ -3500,14 +3646,21 @@ def main():
         print("Beatmap:", beatmap_path)
         beatmap = parse_beatmap(beatmap_path)
         print(f"Parsed {len(beatmap.objects)} hit objects. AR={beatmap.ar}, CS={beatmap.cs}, OD={beatmap.od}")
+        replay_judgment_total = int(replay.count_300) + int(replay.count_100) + int(replay.count_50) + int(replay.count_miss)
+        if replay_judgment_total > 0:
+            object_delta = abs(len(beatmap.objects) - replay_judgment_total)
+            if object_delta > max(12, int(replay_judgment_total * 0.08)):
+                print(
+                    "WARNING: selected beatmap object count differs from replay hit counts "
+                    f"({len(beatmap.objects)} objects vs {replay_judgment_total} replay judgments). "
+                    "This usually means the wrong difficulty was selected."
+                )
         print(f"SliderMultiplier={beatmap.slider_multiplier}, SliderTickRate={beatmap.slider_tick_rate}, TimingPoints={len(beatmap.timing_points)}")
         print("Audio from .osu:", beatmap.audio_filename or "not listed")
         print("Resolved audio:", find_audio_file(beatmap) or "not found")
         print("Background:", beatmap.background_filename or "not found in .osu")
     else:
-        print("Could not find matching .osu beatmap.")
-        print("Keep the exported .osr and matching .osz in:")
-        print("  C:/Users/Trave/AppData/Roaming/osu/exports")
+        raise FileNotFoundError(missing_beatmap_message(replay_path, osu_folder))
 
     configure_output_paths_for_render(replay, replay_path, beatmap)
 
@@ -3625,7 +3778,7 @@ def start_ui() -> None:
     configured_parallel = int(cfg.get("parallel_workers", 0) or 0)
     if configured_parallel < 0:
         configured_parallel = 0
-    parallel_var = tk.StringVar(value=str(min(configured_parallel, MAX_PARALLEL_WORKERS)))
+    parallel_var = tk.StringVar(value=str(configured_parallel))
     output_dir_var = tk.StringVar(value=str(cfg.get("output_dir", "") or BASE_OUTPUT_DIR or "osu_visualizer_output"))
     # Default the UI to the detected monitor resolution/refresh rate.
     # The config may store 0 for auto, but users should see/select the actual value they will get.
@@ -3693,6 +3846,8 @@ def start_ui() -> None:
         key: tk.BooleanVar(value=bool(cfg.get(key, DEFAULT_CONFIG.get(key, True))))
         for _, key in custom_visual_options
     }
+    left_click_label_var = tk.StringVar(value=normalize_click_label(cfg.get("left_click_label", "M1"), "M1"))
+    right_click_label_var = tk.StringVar(value=normalize_click_label(cfg.get("right_click_label", "M2"), "M2"))
 
     judgment_show_great_var = tk.BooleanVar(value=bool(cfg.get("judgment_show_great", False)))
     judgment_text_great_var = tk.StringVar(value=str(cfg.get("judgment_text_great", "Great")))
@@ -3709,51 +3864,131 @@ def start_ui() -> None:
     outer_container = tk.Frame(root)
     outer_container.pack(fill="both", expand=True)
 
-    ui_canvas = tk.Canvas(outer_container, highlightthickness=0)
-    ui_scrollbar = ttk.Scrollbar(outer_container, orient="vertical", command=ui_canvas.yview)
-    ui_canvas.configure(yscrollcommand=ui_scrollbar.set)
+    ui_scrollbar = ttk.Scrollbar(outer_container, orient="vertical")
     ui_scrollbar.pack(side="right", fill="y")
-    ui_canvas.pack(side="left", fill="both", expand=True)
 
-    main_frame = tk.Frame(ui_canvas, padx=14, pady=12)
-    main_frame_window = ui_canvas.create_window((0, 0), window=main_frame, anchor="nw")
+    ui_viewport = tk.Frame(outer_container)
+    ui_viewport.pack(side="left", fill="both", expand=True)
+
+    main_frame = tk.Frame(ui_viewport, padx=14, pady=12)
+    _ui_scroll = {"y": 0, "content_h": 1, "viewport_h": 1}
+
+    def _ui_max_scroll() -> int:
+        return max(0, int(_ui_scroll["content_h"]) - int(_ui_scroll["viewport_h"]))
+
+    def _set_ui_scroll_y(value: int) -> None:
+        max_y = _ui_max_scroll()
+        y = max(0, min(int(value), max_y))
+        _ui_scroll["y"] = y
+        try:
+            main_frame.place_configure(x=0, y=-y, width=max(1, ui_viewport.winfo_width()))
+        except Exception:
+            pass
+
+        content_h = max(1, int(_ui_scroll["content_h"]))
+        viewport_h = max(1, int(_ui_scroll["viewport_h"]))
+        if max_y <= 0:
+            ui_scrollbar.set(0.0, 1.0)
+        else:
+            ui_scrollbar.set(y / content_h, min(1.0, (y + viewport_h) / content_h))
 
     def _refresh_ui_scrollregion(event=None):
         try:
-            ui_canvas.configure(scrollregion=ui_canvas.bbox("all"))
+            _ui_scroll["content_h"] = max(main_frame.winfo_reqheight(), main_frame.winfo_height(), 1)
+            _ui_scroll["viewport_h"] = max(ui_viewport.winfo_height(), 1)
+            _set_ui_scroll_y(_ui_scroll["y"])
         except Exception:
             pass
 
-    def _resize_main_frame_to_canvas(event):
+    def _on_ui_viewport_configure(event):
         try:
-            current = int(float(ui_canvas.itemcget(main_frame_window, "width") or 0))
-            target = int(event.width)
-            if current != target:
-                ui_canvas.itemconfigure(main_frame_window, width=target)
+            _ui_scroll["viewport_h"] = max(int(event.height), 1)
+            main_frame.place_configure(x=0, y=-_ui_scroll["y"], width=max(1, int(event.width)))
         except Exception:
             pass
-        _refresh_ui_scrollregion()
+        root.after_idle(_refresh_ui_scrollregion)
+
+    def _scroll_ui_pixels(delta_pixels: int) -> None:
+        _set_ui_scroll_y(_ui_scroll["y"] + int(delta_pixels))
+
+    def _on_ui_scrollbar(*args):
+        try:
+            if args[0] == "moveto":
+                _set_ui_scroll_y(int(float(args[1]) * max(1, _ui_scroll["content_h"])))
+            elif args[0] == "scroll":
+                amount = int(args[1])
+                unit = str(args[2]) if len(args) > 2 else "units"
+                step = max(30, int(_ui_scroll["viewport_h"] * 0.85)) if unit == "pages" else 48
+                _scroll_ui_pixels(amount * step)
+        except Exception:
+            pass
+
+    def _is_output_log_widget(widget) -> bool:
+        try:
+            while widget is not None:
+                if widget is output_box:
+                    return True
+                widget = widget.master
+        except Exception:
+            pass
+        return False
 
     def _on_ui_mousewheel(event):
+        if _is_output_log_widget(getattr(event, "widget", None)):
+            return None
         try:
             delta = event.delta
             if delta == 0:
                 return
-            ui_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+            _scroll_ui_pixels(int(-1 * (delta / 120) * 48))
+        except Exception:
+            pass
+        return "break"
+
+    def _on_ui_mousewheel_linux_up(event):
+        if _is_output_log_widget(getattr(event, "widget", None)):
+            return None
+        _scroll_ui_pixels(-48)
+        return "break"
+
+    def _on_ui_mousewheel_linux_down(event):
+        if _is_output_log_widget(getattr(event, "widget", None)):
+            return None
+        _scroll_ui_pixels(48)
+        return "break"
+
+    def _on_value_control_mousewheel(event):
+        try:
+            if getattr(event, "num", None) == 4:
+                _scroll_ui_pixels(-48)
+            elif getattr(event, "num", None) == 5:
+                _scroll_ui_pixels(48)
+            else:
+                delta = getattr(event, "delta", 0)
+                if delta:
+                    _scroll_ui_pixels(int(-1 * (delta / 120) * 48))
+        except Exception:
+            pass
+        return "break"
+
+    def _block_value_control_mousewheel(widget):
+        try:
+            if widget.winfo_class() in {"TCombobox", "TSpinbox", "Spinbox", "Scale", "TScale"}:
+                widget.bind("<MouseWheel>", _on_value_control_mousewheel)
+                widget.bind("<Button-4>", _on_value_control_mousewheel)
+                widget.bind("<Button-5>", _on_value_control_mousewheel)
+            for child in widget.winfo_children():
+                _block_value_control_mousewheel(child)
         except Exception:
             pass
 
-    def _on_ui_mousewheel_linux_up(event):
-        ui_canvas.yview_scroll(-1, "units")
-
-    def _on_ui_mousewheel_linux_down(event):
-        ui_canvas.yview_scroll(1, "units")
-
+    ui_scrollbar.configure(command=_on_ui_scrollbar)
+    main_frame.place(x=0, y=0, width=max(1, root.winfo_width()))
     main_frame.bind("<Configure>", _refresh_ui_scrollregion)
-    ui_canvas.bind("<Configure>", _resize_main_frame_to_canvas)
-    ui_canvas.bind_all("<MouseWheel>", _on_ui_mousewheel)
-    ui_canvas.bind_all("<Button-4>", _on_ui_mousewheel_linux_up)
-    ui_canvas.bind_all("<Button-5>", _on_ui_mousewheel_linux_down)
+    ui_viewport.bind("<Configure>", _on_ui_viewport_configure)
+    root.bind_all("<MouseWheel>", _on_ui_mousewheel)
+    root.bind_all("<Button-4>", _on_ui_mousewheel_linux_up)
+    root.bind_all("<Button-5>", _on_ui_mousewheel_linux_down)
 
     title = tk.Label(main_frame, text="osu! Replay Click Visualizer", font=("Segoe UI", 16, "bold"))
     title.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
@@ -3815,6 +4050,17 @@ def start_ui() -> None:
     custom_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
     for idx, (label, key) in enumerate(custom_visual_options):
         tk.Checkbutton(custom_frame, text=label, variable=custom_visual_vars[key]).grid(row=idx // 2, column=idx % 2, sticky="w", padx=8, pady=2)
+    click_label_row = (len(custom_visual_options) + 1) // 2
+    left_click_frame = tk.Frame(custom_frame)
+    right_click_frame = tk.Frame(custom_frame)
+    left_click_frame.grid(row=click_label_row, column=0, sticky="ew", padx=8, pady=(6, 4))
+    right_click_frame.grid(row=click_label_row, column=1, sticky="ew", padx=8, pady=(6, 4))
+    left_click_frame.grid_columnconfigure(1, weight=1)
+    right_click_frame.grid_columnconfigure(1, weight=1)
+    tk.Label(left_click_frame, text="Left click", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 6))
+    tk.Entry(left_click_frame, textvariable=left_click_label_var, width=10).grid(row=0, column=1, sticky="ew")
+    tk.Label(right_click_frame, text="Right click", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 6))
+    tk.Entry(right_click_frame, textvariable=right_click_label_var, width=10).grid(row=0, column=1, sticky="ew")
 
     judgment_frame = ttk.LabelFrame(visual_options_frame, text="Judgment popup text")
     judgment_frame.grid(row=1, column=0, sticky="ew", padx=(0, 6))
@@ -3940,6 +4186,8 @@ def start_ui() -> None:
             judgment_position_var.get(),
             judgment_offset_x_var.get(),
             judgment_offset_y_var.get(),
+            left_click_label_var.get(),
+            right_click_label_var.get(),
             judgment_draw_miss_x_var.get(),
             judgment_show_slider_details_var.get(),
             tuple((k, bool(v.get())) for k, v in sorted(custom_visual_vars.items())),
@@ -3966,6 +4214,8 @@ def start_ui() -> None:
         connectors_enabled = preview_layer_enabled("custom_draw_stream_connectors")
         judgments_enabled = preview_layer_enabled("custom_draw_judgments")
         judgment_totals_enabled = preview_layer_enabled("custom_draw_judgment_totals")
+        left_click_label = normalize_click_label(left_click_label_var.get(), "M1")
+        right_click_label = normalize_click_label(right_click_label_var.get(), "M2")
 
         def sc(v: float) -> int:
             return int(round(v * aa_scale))
@@ -4147,7 +4397,7 @@ def start_ui() -> None:
 
         if pulses_enabled:
             circle(img, cursor_x, cursor_y, 36, "#ff7a1a", thickness=2.5)
-            put_text(img, "A", cursor_x + 24, cursor_y - 18, color="#ff9a35", size=0.48, thickness=2, anchor="left")
+            put_text(img, left_click_label, cursor_x + 24, cursor_y - 18, color="#ff9a35", size=0.48, thickness=2, anchor="left")
 
         if judgments_enabled:
             label = preview_judgment_label()
@@ -4164,18 +4414,18 @@ def start_ui() -> None:
 
         if keys_enabled:
             kx, ky = 18, h - 48
-            for i, (label, held, color) in enumerate([("A", True, "#ff7800"), ("D", False, "#00beff")]):
+            for i, (label, held, color) in enumerate([(left_click_label, True, "#ff7800"), (right_click_label, False, "#00beff")]):
                 x0 = kx + i * 50
                 rect(img, x0, ky, x0 + 40, ky + 30, "#46b85a" if held else "#424242")
                 rect(img, x0, ky, x0 + 40, ky + 30, color, thickness=1.5)
-                put_text(img, label, x0 + 20, ky + 15, color="#ffffff", size=0.48, thickness=2, anchor="center")
+                put_text(img, label, x0 + 20, ky + 15, color="#ffffff", size=0.42 if len(label) > 2 else 0.48, thickness=2, anchor="center")
 
         if timeline_enabled:
             x0, y0, x1, y1 = 132, h - 50, w - 18, h - 20
             rect(img, x0, y0, x1, y1, "#17171d")
             rect(img, x0, y0, x1, y1, "#44444c", thickness=1)
-            put_text(img, "A", x0 + 8, y0 + 10, color="#ff7800", size=0.24, thickness=1, anchor="left", shadow=False)
-            put_text(img, "D", x0 + 8, y0 + 24, color="#00beff", size=0.24, thickness=1, anchor="left", shadow=False)
+            put_text(img, left_click_label, x0 + 8, y0 + 10, color="#ff7800", size=0.24, thickness=1, anchor="left", shadow=False)
+            put_text(img, right_click_label, x0 + 8, y0 + 24, color="#00beff", size=0.24, thickness=1, anchor="left", shadow=False)
             line(img, x1 - 12, y0 + 4, x1 - 12, y1 - 4, "#ffffff", thickness=1.5)
             for x, y, color in [(x1 - 130, y0 + 10, "#ff7800"), (x1 - 82, y0 + 24, "#00beff"), (x1 - 44, y0 + 10, "#ff7800")]:
                 circle(img, x, y, 4, color)
@@ -4208,7 +4458,8 @@ def start_ui() -> None:
         visual_style_var, performance_var, judgment_show_great_var, judgment_text_great_var,
         judgment_text_ok_var, judgment_text_meh_var, judgment_text_miss_var,
         judgment_position_var, judgment_offset_x_var, judgment_offset_y_var,
-        judgment_draw_miss_x_var, judgment_show_slider_details_var, background_mode_var, cursor_style_var, cursor_size_var,
+        left_click_label_var, right_click_label_var, judgment_draw_miss_x_var, judgment_show_slider_details_var,
+        background_mode_var, cursor_style_var, cursor_size_var,
     ]
     for var in preview_vars:
         try:
@@ -4319,7 +4570,7 @@ def start_ui() -> None:
     desc_label(9, resolution_desc_var)
 
     row_label(10, "Parallel workers (0 = Auto)")
-    ttk.Spinbox(main_frame, from_=0, to=MAX_PARALLEL_WORKERS, textvariable=parallel_var, increment=1).grid(row=10, column=1, sticky="ew", pady=4)
+    ttk.Entry(main_frame, textvariable=parallel_var).grid(row=10, column=1, sticky="ew", pady=4)
     desc_label(10, parallel_desc_var)
 
     row_label(11, "Snake-in duration ms")
@@ -4388,9 +4639,14 @@ def start_ui() -> None:
     main_frame.grid_rowconfigure(25, weight=1)
 
     def append_log(text: str):
+        try:
+            _first, last = output_box.yview()
+            should_follow = last >= 0.995
+        except Exception:
+            should_follow = True
         output_box.insert("end", text)
-        output_box.see("end")
-        root.update_idletasks()
+        if should_follow:
+            output_box.see("end")
 
     def collect_cfg() -> Dict:
         new_cfg = dict(DEFAULT_CONFIG)
@@ -4412,6 +4668,8 @@ def start_ui() -> None:
         new_cfg["performance_mode"] = performance_var.get().strip().lower()
         for _, key in custom_visual_options:
             new_cfg[key] = bool(custom_visual_vars[key].get())
+        new_cfg["left_click_label"] = normalize_click_label(left_click_label_var.get(), "M1")
+        new_cfg["right_click_label"] = normalize_click_label(right_click_label_var.get(), "M2")
         bg_mode = background_mode_var.get().strip().lower()
         new_cfg["background_mode"] = bg_mode if bg_mode in ("dim", "solid", "off") else "dim"
 
@@ -4441,7 +4699,7 @@ def start_ui() -> None:
             parallel_workers = int(parallel_var.get().strip())
         except ValueError:
             parallel_workers = 0
-        new_cfg["parallel_workers"] = max(0, min(MAX_PARALLEL_WORKERS, parallel_workers))
+        new_cfg["parallel_workers"] = max(0, parallel_workers)
         fps_choice = fps_var.get().strip()
         if fps_choice.lower().startswith("auto"):
             new_cfg["render_fps"] = 0
@@ -4550,6 +4808,7 @@ def start_ui() -> None:
     else:
         append_log("For osu!(lazer), put exported .osr replay and matching .osz beatmap in the exports folder." + NL)
 
+    root.after_idle(lambda: _block_value_control_mousewheel(root))
     root.mainloop()
 
 
@@ -4577,11 +4836,13 @@ def run_chunk_renderer_main() -> None:
     beatmap = None
     beatmap_path = Path(BEATMAP_PATH).expanduser() if BEATMAP_PATH else None
     if beatmap_path and beatmap_path.exists():
-        beatmap = parse_beatmap(resolve_selected_beatmap_override(beatmap_path, replay.beatmap_hash))
+        beatmap = parse_beatmap(resolve_selected_beatmap_override(beatmap_path, replay.beatmap_hash, replay_path))
     else:
         found = find_beatmap(osu_folder, replay.beatmap_hash, replay_path)
         if found:
             beatmap = parse_beatmap(found)
+    if beatmap is None:
+        raise FileNotFoundError(missing_beatmap_message(replay_path, osu_folder))
 
     Renderer(frames, clicks, beatmap, replay, replay_to_song_offset, replay_path=replay_path).render_silent_range(
         out_path,
@@ -4613,7 +4874,7 @@ def run_console_main() -> None:
         print("- If the wrong replay is used, set replay_path in osu_visualizer_config.json.")
         print("- If beatmap matching fails, set beatmap_path to the extracted .osu file.")
         print("- If clicks are globally early/late, adjust MANUAL_REPLAY_TO_SONG_OFFSET_MS.")
-        print("- If NVENC fails, set render_encoder to libx264 in osu_visualizer_config.json.")
+        print("- If NVENC fails, lower Parallel workers or set render_encoder to libx264 in osu_visualizer_config.json.")
         sys.exit(1)
 
 
