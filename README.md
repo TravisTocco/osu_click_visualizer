@@ -243,6 +243,6 @@ Contributions, fixes, improvements, and rewrites are welcome.
 
 Created for osu! replay review and visualization.
 
-Special thanks to @DanielRRicci for helping with bug testing and general input which helped with the direction of the project
+Special thanks to [DanielRRicci](https://github.com/DanielRRicci) for helping with bug testing and general input which helped with the direction of the project
 
 osu! is owned by its respective creators. This project is unofficial and is not affiliated with or endorsed by osu!, ppy, or osu!(lazer).
